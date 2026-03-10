@@ -297,7 +297,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                         className="flex h-11 w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
                                     >
                                         {availableModels.map(m => (
-                                            <option key={m} value={m}>{m}</option>
+                                            <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">{m}</option>
                                         ))}
                                     </select>
                                 </div>
