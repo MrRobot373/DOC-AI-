@@ -80,7 +80,6 @@ SEVERITY_LEVELS = {
     "CRITICAL": {"label": "Critical", "color": "#ff4444", "weight": 4},
     "MAJOR": {"label": "Major", "color": "#ff8800", "weight": 3},
     "MINOR": {"label": "Minor", "color": "#ffcc00", "weight": 2},
-    "SUGGESTION": {"label": "Suggestion", "color": "#44aaff", "weight": 1},
 }
 
 
@@ -279,7 +278,7 @@ Return a JSON array of findings. IMPORTANT: Use the (Starts on Page X) or --- [P
 Each finding must be:
 {{
   "category": "CATEGORY_ID",
-  "severity": "CRITICAL|MAJOR|MINOR|SUGGESTION",
+  "severity": "CRITICAL|MAJOR|MINOR",
   "page": "Exact page number (e.g., '14') based on the text markers",
   "section": "section reference",
   "comment": "detailed description of the issue and suggested fix"
@@ -325,7 +324,7 @@ def _review_consistency_with_llm(client, model, doc_summary):
 Return a JSON array of findings. Each finding must be:
 {{
   "category": "CATEGORY_ID",
-  "severity": "CRITICAL|MAJOR|MINOR|SUGGESTION",
+  "severity": "CRITICAL|MAJOR|MINOR",
   "page": "page number or 'ALL'",
   "section": "section reference or 'ALL'",
   "comment": "detailed description of the issue"
@@ -383,7 +382,7 @@ def _review_tables_with_llm(client, model, parsed_doc):
 Return a JSON array of findings. Each finding must be:
 {{
   "category": "CATEGORY_ID",
-  "severity": "CRITICAL|MAJOR|MINOR|SUGGESTION",
+  "severity": "CRITICAL|MAJOR|MINOR",
   "page": "-",
   "section": "Table X",
   "comment": "detailed description"
@@ -438,6 +437,8 @@ def _parse_llm_findings(llm_response, source="llm"):
                 category = "GRAMMAR_SPELLING"
 
             severity = f.get("severity", "MINOR").upper()
+            if severity == "SUGGESTION":
+                continue  # Skip suggestions entirely as requested
             if severity not in SEVERITY_LEVELS:
                 severity = "MINOR"
 
