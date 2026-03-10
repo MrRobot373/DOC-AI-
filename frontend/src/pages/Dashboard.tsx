@@ -32,13 +32,11 @@ export default function Dashboard({ user }: DashboardProps) {
     const [savingSettings, setSavingSettings] = useState(false)
     const [testResult, setTestResult] = useState<string | null>(null)
     const [availableModels, setAvailableModels] = useState<string[]>([
+        "gpt-oss:120b-cloud",
         "qwen3.5:397b-cloud",
         "minimax-m2.5:cloud",
-        "glm-5:cloud",
-        "kimi-k2.5:cloud",
         "kimi-k2-thinking:cloud",
-        "gpt-oss:120b-cloud",
-        "gpt-oss:20b-cloud"
+        "deepseek-v3.1:671b-cloud"
     ])
     const [selectedModel, setSelectedModel] = useState("gpt-oss:120b-cloud")
 
@@ -323,6 +321,29 @@ export default function Dashboard({ user }: DashboardProps) {
                                     <ExternalLink className="h-3 w-3" />
                                     Generate API Key on ollama.com
                                 </a>
+                            </div>
+
+                            {/* How To Use Section */}
+                            <div className="pt-4 border-t border-white/5 space-y-3">
+                                <h3 className="text-sm font-semibold text-white">How to Use DOC-AI</h3>
+                                <div className="space-y-4 text-xs text-gray-400">
+                                    <div className="flex gap-3">
+                                        <div className="h-5 w-5 rounded-full bg-white/10 text-white flex items-center justify-center shrink-0">1</div>
+                                        <p><span className="text-white font-medium">Get your API Key:</span> Log into your Ollama account using the link above. Go to Settings &gt; API Keys, generate a new key, and paste it in the field above.</p>
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <div className="h-5 w-5 rounded-full bg-white/10 text-white flex items-center justify-center shrink-0">2</div>
+                                        <p><span className="text-white font-medium">Test &amp; Save:</span> Click "Test &amp; Save" below. If successful, your key is locked in and you can close this window.</p>
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <div className="h-5 w-5 rounded-full bg-white/10 text-white flex items-center justify-center shrink-0">3</div>
+                                        <p><span className="text-white font-medium">Upload Document:</span> On the dashboard, upload any Word Document (.docx) and click "Start AI Review."</p>
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <div className="h-5 w-5 rounded-full bg-white/10 text-white flex items-center justify-center shrink-0">4</div>
+                                        <p><span className="text-white font-medium">Wait &amp; Download:</span> Processing takes 1 to 5 minutes depending on document length. Once 100% complete, click the "Download Excel Report" button to view your findings.</p>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
