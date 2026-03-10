@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: doc-ai-backend
+    env: python
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn -c gunicorn.conf.py app:app"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: PORT
+        value: 10000
