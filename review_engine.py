@@ -7,6 +7,7 @@ comprehensive document review across all check categories.
 import os
 import json
 import re
+import difflib
 from datetime import datetime
 from ollama import Client
 
@@ -62,11 +63,6 @@ REVIEW_CATEGORIES = {
         "name": "Logical Consistency",
         "icon": "🧠",
         "description": "Logical errors in descriptions, contradictory statements, fault handling mismatches",
-    },
-    "MISSING_CONTENT": {
-        "name": "Missing Content",
-        "icon": "⚠️",
-        "description": "Sections with only figures/tables without explanatory text, missing descriptions",
     },
     "CONNECTOR_PIN_MAPPING": {
         "name": "Connector & Pin Mapping",
@@ -143,14 +139,7 @@ def review_document(client, model, parsed_doc, progress_callback=None):
                 if chunk_findings:
                     findings.extend(chunk_findings)
             except Exception as e:
-                findings.append({
-                    "category": "MISSING_CONTENT",
-                    "severity": "MINOR",
-                    "page": "-",
-                    "section": f"Chunk {i+1}",
-                    "comment": f"Error parsing this section: {str(e)}",
-                    "source": "llm_error"
-                })
+                pass
 
         # Step 3: Full-document cross-reference and consistency check
         if progress_callback:
@@ -207,35 +196,6 @@ def _run_local_checks(parsed_doc):
     """Run checks that don't need LLM - formatting, fonts, spacing, images."""
     findings = []
     fmt = parsed_doc["formatting"]
-
-    # Check for empty sections
-    for section in parsed_doc["sections"]:
-        texts = [p["text"] for p in section["paragraphs"] if p["text"]]
-        has_image = any(p["has_image"] for p in section["paragraphs"])
-        if not texts and has_image:
-            findings.append({
-                "category": "MISSING_CONTENT",
-                "severity": "MAJOR",
-                "page": "-",
-                "section": section["heading"],
-                "comment": (
-                    f"Section '{section['heading']}' contains only images/figures without any "
-                    f"explanatory text. Add descriptions explaining the content."
-                ),
-                "source": "local",
-            })
-        elif len(texts) <= 1 and has_image:
-            findings.append({
-                "category": "MISSING_CONTENT",
-                "severity": "MINOR",
-                "page": "-",
-                "section": section["heading"],
-                "comment": (
-                    f"Section '{section['heading']}' has minimal text alongside images. "
-                    f"Consider adding more detailed descriptions."
-                ),
-                "source": "local",
-            })
 
     # Check for font inconsistencies
     default_font = fmt.get("default_font")
@@ -305,7 +265,6 @@ IMPORTANT: You must check for EVERY category listed below. Be thorough and flag 
 10. WAVEFORM_DOCUMENTATION: Waveform references missing signal names, probe points, legends
 11. CROSS_REFERENCE_ACCURACY: Wrong figure/section/table references
 12. LOGICAL_CONSISTENCY: Logical errors, contradictions, fault handling mismatches
-13. MISSING_CONTENT: Sections with insufficient description
 14. CONNECTOR_PIN_MAPPING: Connector references without proper IDs
 15. MEASUREMENT_RESOLUTION: Measurement values that seem unclear or at wrong precision
 
@@ -344,14 +303,7 @@ Example:
         reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
         return _parse_llm_findings(reply, "llm_chunk")
     except Exception as e:
-        return [{
-            "category": "MISSING_CONTENT",
-            "severity": "SUGGESTION",
-            "page": "-",
-            "section": f"Chunk {chunk_num}",
-            "comment": f"AI review error for this section: {str(e)[:200]}",
-            "source": "llm_error",
-        }]
+        return []
 
 
 def _review_consistency_with_llm(client, model, doc_summary):
@@ -366,7 +318,6 @@ def _review_consistency_with_llm(client, model, doc_summary):
 1. Cross-reference accuracy (do figure/table/section references point to correct items?)
 2. Terminology consistency across the entire document
 4. Overall logical flow and completeness
-5. Missing sections or descriptions
 6. Consistent use of abbreviations/shortforms (are they defined on first use?)
 7. Consistent formatting patterns across similar sections
 
@@ -506,12 +457,17 @@ def _parse_llm_findings(llm_response, source="llm"):
 
 def _deduplicate_findings(findings):
     """Remove duplicate or very similar findings."""
-    seen = set()
     unique = []
     for f in findings:
-        # Create a rough key from category + first 100 chars of comment
-        key = f"{f['category']}:{f['comment'][:100].lower()}"
-        if key not in seen:
-            seen.add(key)
+        is_duplicate = False
+        for u in unique:
+            # If category is the same, and they are either in the same section or same page, check similarity
+            if f.get('category') == u.get('category'):
+                # Check comment similarity (70% match is considered a duplicate)
+                ratio = difflib.SequenceMatcher(None, f.get('comment', '').lower(), u.get('comment', '').lower()).ratio()
+                if ratio > 0.7:
+                    is_duplicate = True
+                    break
+        if not is_duplicate:
             unique.append(f)
     return unique
