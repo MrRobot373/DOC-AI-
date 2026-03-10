@@ -6,3 +6,4 @@ requests
 ollama
 Pillow
 gunicorn
+nltk
