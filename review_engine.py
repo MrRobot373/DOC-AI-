@@ -275,6 +275,7 @@ def _review_chunk_with_llm(client, model, chunk_text, doc_summary, chunk_num, ac
 Review the following section of a technical document and find ALL issues.
 
 IMPORTANT: You must check for ONLY the categories listed below.
+CRITICAL: Do NEVER flag errors regarding "incomplete sentences", "abruptly ending text", "garbled text", or "nonsensical values" (e.g., 'xzccccxc', 'PCBDddduiouioDriver'). These are artifacts of the text extraction or test data. Ignore them entirely.
 
 ## Review Categories:
 {cat_list}
@@ -332,6 +333,8 @@ def _review_consistency_with_llm(client, model, doc_summary):
 4. Overall logical flow and completeness
 6. Consistent use of abbreviations/shortforms (are they defined on first use?)
 7. Consistent formatting patterns across similar sections
+
+CRITICAL: Do NEVER flag errors regarding "incomplete sentences", "abruptly ending text", "garbled text", or "nonsensical values". Ignore extraction artifacts completely.
 
 ## Output Format:
 Return a JSON array of findings. Each finding must be:
@@ -394,6 +397,7 @@ def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
 7. Consistent formatting across rows
 
 IMPORTANT: Do NOT report errors stating that a table is "incomplete" or "truncated". Assume data may legitimately continue on another page.
+CRITICAL: Do NEVER flag errors regarding "garbled text" or "nonsensical values" (e.g., 'xzccccxc', 'PCBDddduiouioDriver'). Ignore placeholder or extraction artifact text completely.
 
 ## Tables:
 {chr(10).join(tables_text)}
