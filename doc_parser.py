@@ -11,9 +11,11 @@ import base64
 import zipfile
 import shutil
 from docx import Document
+import openpyxl
 from docx.shared import Inches, Pt, Emu
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from PIL import Image
+import openpyxl
 
 
 def parse_document(filepath):
@@ -26,9 +28,15 @@ def parse_document(filepath):
         if "NULL" in str(e):
             print(f"Sanitizing corrupt DOCX relationships for {filepath}")
             _sanitize_docx(filepath)
-            doc = Document(filepath)
+            doc = Document(filepath) # Re-attempt parsing after sanitization
         else:
             raise e
+    except Exception as e:
+        # Fallback to a very simple parse if something fails
+        return {
+            "statistics": {"total_words": 0, "total_sections": 0, "total_tables": 0, "total_images": 0},
+            "sections": [{"title": "Error", "level": 1, "paragraphs": [{"text": f"Error parsing document: {str(e)}", "heading_level": 0, "alignment": "LEFT", "runs": [], "has_image": False}]}]
+        }
     result = {
         "filename": os.path.basename(filepath),
         "sections": [],
@@ -145,6 +153,86 @@ def parse_document(filepath):
     result["statistics"] = _compute_statistics(result)
 
     return result
+
+
+def parse_excel(filepath):
+    """
+    Parse an Excel (.xlsx) file and extract content in a structured format compatible with Word parser.
+    Each sheet is treated as a major section.
+    """
+    try:
+        wb = openpyxl.load_workbook(filepath, data_only=True)
+        parsed = {
+            "filename": os.path.basename(filepath),
+            "sections": [],
+            "tables": [],
+            "images": [],
+            "statistics": {},
+            "metadata": {"source_type": "excel"}
+        }
+
+        total_words = 0
+        all_text_lines = []
+        
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            paragraphs = []
+            
+            # Add sheet title as a heading
+            paragraphs.append({
+                "text": f"SHEET: {sheet_name}",
+                "heading_level": 1,
+                "alignment": "LEFT",
+                "runs": [{"text": f"SHEET: {sheet_name}", "bold": True, "italic": False, "size_pt": 14}],
+                "has_image": False
+            })
+            all_text_lines.append(f"SHEET: {sheet_name}")
+
+            # Extract cell data row by row
+            for row in ws.iter_rows(values_only=True):
+                # Filter out empty rows
+                if not any(cell is not None and str(cell).strip() != "" for cell in row):
+                    continue
+                
+                row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
+                if row_text.strip():
+                    total_words += len(row_text.split())
+                    paragraphs.append({
+                        "text": row_text,
+                        "heading_level": 0,
+                        "alignment": "LEFT",
+                        "runs": [{"text": row_text, "bold": False, "italic": False, "size_pt": 10}],
+                        "has_image": False
+                    })
+                    all_text_lines.append(row_text)
+
+            parsed["sections"].append({
+                "title": sheet_name,
+                "level": 1,
+                "paragraphs": paragraphs
+            })
+
+        # Set statistics
+        parsed["statistics"] = {
+            "total_words": total_words,
+            "total_sections": len(wb.sheetnames),
+            "total_tables": len(wb.sheetnames), 
+            "total_images": 0
+        }
+        parsed["raw_text"] = "\n".join(all_text_lines)
+
+        return parsed
+
+    except Exception as e:
+        return {
+            "filename": os.path.basename(filepath),
+            "statistics": {"total_words": 0, "total_sections": 0, "total_tables": 0, "total_images": 0},
+            "sections": [{"title": "Error", "level": 1, "paragraphs": [{"text": f"Error parsing Excel: {str(e)}", "heading_level": 0, "alignment": "LEFT", "runs": [], "has_image": False}]}],
+            "tables": [],
+            "images": [],
+            "raw_text": ""
+        }
+
 
 
 def _emu_to_inches(emu_val):

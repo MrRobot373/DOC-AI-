@@ -48,6 +48,7 @@ export default function Dashboard({ user }: DashboardProps) {
     const [progressPct, setProgressPct] = useState(0)
     const [reportUrl, setReportUrl] = useState<string | null>(null)
     const [findings, setFindings] = useState<any[]>([])
+    const [fileType, setFileType] = useState<'doc' | 'excel'>('doc')
 
     const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -114,9 +115,27 @@ export default function Dashboard({ user }: DashboardProps) {
     }
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files.length > 0) {
-            setSelectedFile(e.target.files[0])
+        const file = e.target.files?.[0]
+        if (!file) return
+
+        const ext = file.name.split('.').pop()?.toLowerCase()
+        if (fileType === 'excel') {
+            if (ext !== 'xlsx' && ext !== 'xls') {
+                alert("Please upload an Excel file (.xlsx or .xls)")
+                return
+            }
+        } else {
+            if (ext !== 'docx' && ext !== 'doc') {
+                alert("Please upload a Word document (.docx or .doc)")
+                return
+            }
         }
+
+        setSelectedFile(file)
+        setFindings([])
+        setProgressPct(0)
+        setProgressMsg("")
+        setReportUrl(null)
     }
 
     const handleStartReview = async () => {
@@ -138,6 +157,7 @@ export default function Dashboard({ user }: DashboardProps) {
         formData.append('model', selectedModel || "gpt-oss:120b-cloud")
         formData.append('review_mode', reviewMode)
         formData.append('document', selectedFile)
+        formData.append('file_type', fileType)
 
         try {
             const resp = await fetch(`${API_BASE_URL}/api/review`, {
@@ -367,9 +387,28 @@ export default function Dashboard({ user }: DashboardProps) {
             <main className="flex-1 flex flex-col items-center justify-start px-6 py-12 max-w-4xl mx-auto w-full">
 
                 {/* Upload Section */}
-                <div className="w-full space-y-2 mb-8">
-                    <h2 className="text-2xl font-bold tracking-tight text-white">Document Review</h2>
-                    <p className="text-sm text-gray-500">Upload a Word document (.docx) and get an AI-powered quality review.</p>
+                <div className="w-full flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+                    <div className="space-y-2">
+                        <h2 className="text-2xl font-bold tracking-tight text-white">Document Review</h2>
+                        <p className="text-sm text-gray-500">
+                            Upload a {fileType === 'excel' ? 'Excel sheet' : 'Word document'} and get an AI review.
+                        </p>
+                    </div>
+
+                    <div className="flex bg-white/5 p-1 rounded-xl border border-white/5">
+                        <button
+                            onClick={() => { setFileType('doc'); setSelectedFile(null); }}
+                            className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${fileType === 'doc' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'text-gray-500 hover:text-gray-300'}`}
+                        >
+                            Word Document
+                        </button>
+                        <button
+                            onClick={() => { setFileType('excel'); setSelectedFile(null); }}
+                            className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${fileType === 'excel' ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'text-gray-500 hover:text-gray-300'}`}
+                        >
+                            Excel Sheet
+                        </button>
+                    </div>
                 </div>
 
                 <Card className="w-full border-white/10 bg-white/[0.02] shadow-none">
@@ -384,19 +423,19 @@ export default function Dashboard({ user }: DashboardProps) {
                                     <UploadCloud className="h-7 w-7 text-gray-500 group-hover:text-gray-300 transition-colors" />
                                 </div>
                                 <h3 className="text-lg font-medium text-gray-200 mb-1">Click to upload document</h3>
-                                <p className="text-sm text-gray-500">Supports .docx format</p>
+                                <p className="text-sm text-gray-500">Supports {fileType === 'excel' ? '.xlsx, .xls' : '.docx, .doc'}</p>
                                 <input
                                     type="file"
                                     ref={fileInputRef}
                                     onChange={handleFileChange}
-                                    accept=".docx"
+                                    accept={fileType === 'excel' ? ".xlsx,.xls" : ".docx,.doc"}
                                     className="hidden"
                                 />
                             </div>
                         ) : (
                             <div className="border border-white/10 p-5 rounded-xl flex items-center justify-between bg-white/[0.02]">
                                 <div className="flex items-center gap-4">
-                                    <div className="h-12 w-12 bg-blue-500/10 text-blue-400 rounded-xl flex items-center justify-center">
+                                    <div className={`h-12 w-12 ${fileType === 'excel' ? 'bg-green-500/10 text-green-400' : 'bg-blue-500/10 text-blue-400'} rounded-xl flex items-center justify-center`}>
                                         <FileText className="h-5 w-5" />
                                     </div>
                                     <div>

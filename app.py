@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from supabase import create_client, Client
 
-from doc_parser import parse_document, get_document_summary
+from doc_parser import parse_document, parse_excel, get_document_summary
 from review_engine import (
     create_ollama_client,
     test_connection,
@@ -114,7 +114,7 @@ def list_models():
     return jsonify(result)
 
 
-def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro"):
+def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc"):
     """Background worker that runs the full document review."""
     store = _load_store()
     try:
@@ -129,7 +129,10 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         })
         _save_store(store)
 
-        parsed = parse_document(filepath)
+        if file_type == "excel":
+            parsed = parse_excel(filepath)
+        else:
+            parsed = parse_document(filepath)
         store = _load_store()
         store[review_id].update({
             "progress": 20,
@@ -244,6 +247,7 @@ def start_review():
     host = request.form.get("host", "https://ollama.com")
     model = request.form.get("model", "")
     review_mode = request.form.get("review_mode", "pro")
+    file_type = request.form.get("file_type", "doc")
 
     if not api_key:
         return jsonify({"success": False, "error": "API key is required"})
@@ -257,8 +261,12 @@ def start_review():
     if not file.filename:
         return jsonify({"success": False, "error": "No file selected"})
 
-    if not file.filename.lower().endswith((".docx", ".doc")):
-        return jsonify({"success": False, "error": "Only .docx files are supported"})
+    if file_type == "excel":
+        if not file.filename.lower().endswith((".xlsx", ".xls")):
+            return jsonify({"success": False, "error": "Only .xlsx or .xls files are supported for Excel mode"})
+    else:
+        if not file.filename.lower().endswith((".docx", ".doc")):
+            return jsonify({"success": False, "error": "Only .docx or .doc files are supported for Document mode"})
 
     # Save uploaded file
     review_id = str(uuid.uuid4())[:8]
@@ -278,7 +286,7 @@ def start_review():
     # Start background thread
     thread = threading.Thread(
         target=_run_review_in_background,
-        args=(review_id, filepath, file.filename, api_key, host, model, review_mode),
+        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type),
         daemon=True,
     )
     thread.start()
