@@ -11,6 +11,7 @@ import base64
 import zipfile
 import shutil
 from docx import Document
+from docx.text.paragraph import Paragraph
 import openpyxl
 from docx.shared import Inches, Pt, Emu
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -340,6 +341,17 @@ def _paragraph_has_image(para):
 
 def _extract_table(table, tbl_idx):
     """Extract table content and check formatting."""
+    name = f"Table {tbl_idx + 1}"
+    try:
+        prev_element = table._element.getprevious()
+        if prev_element is not None and prev_element.tag.endswith('p'):
+            p = Paragraph(prev_element, table._parent)
+            text = p.text.strip()
+            if text:
+                name = text[:150] # Use preceding text as table name, capped to prevent massive names
+    except Exception:
+        pass
+
     rows_data = []
     for row_idx, row in enumerate(table.rows):
         cells = []
@@ -352,6 +364,7 @@ def _extract_table(table, tbl_idx):
 
     return {
         "index": tbl_idx,
+        "name": name,
         "rows": rows_data,
         "num_rows": len(rows_data),
         "num_cols": len(rows_data[0]) if rows_data else 0,

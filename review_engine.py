@@ -376,12 +376,13 @@ def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
         active_categories = ["UNITS_CALCULATIONS", "TEST_RESULT_COMPLETENESS", "MEASUREMENT_RESOLUTION", "FORMATTING_ALIGNMENT"]
 
     tables_text = []
-    for tbl in parsed_doc["tables"][:10]:  # Limit to first 10 tables
+    for tbl in parsed_doc["tables"][:15]:  # Limit to first 15 tables
+        tbl_name = tbl.get("name", f"Table {tbl['index'] + 1}")
         rows_str = "\n".join(
-            f"  Row {i}: {' | '.join(c[:60] for c in row)}"
-            for i, row in enumerate(tbl["rows"][:10])
+            f"  Row {i}: {' | '.join(c[:150] for c in row)}"
+            for i, row in enumerate(tbl["rows"][:50])
         )
-        tables_text.append(f"Table {tbl['index'] + 1} ({tbl['num_rows']}×{tbl['num_cols']}):\n{rows_str}")
+        tables_text.append(f"--- {tbl_name} ({tbl['num_rows']}×{tbl['num_cols']}) ---\n{rows_str}")
 
     prompt = f"""You are reviewing TABLES in a technical document. Check each table for:
 1. Missing headers or unclear column names
@@ -392,6 +393,8 @@ def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
 6. Calculation errors or suspicious values
 7. Consistent formatting across rows
 
+IMPORTANT: Do NOT report errors stating that a table is "incomplete" or "truncated". Assume data may legitimately continue on another page.
+
 ## Tables:
 {chr(10).join(tables_text)}
 
@@ -401,8 +404,9 @@ Return a JSON array of findings. Each finding must be:
   "category": "CATEGORY_ID",
   "severity": "CRITICAL|MAJOR|MINOR",
   "page": "-",
-  "section": "Table X",
-  "comment": "detailed description"
+  "section": "Exact Table Name (from the --- Name --- marker)",
+  "comment": "detailed description",
+  "fix": "step-by-step instruction on how to fix this specific error"
 }}
 
 Return ONLY the JSON array. If no issues, return [].
