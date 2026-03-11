@@ -8,6 +8,8 @@ import os
 import io
 import re
 import base64
+import zipfile
+import shutil
 from docx import Document
 from docx.shared import Inches, Pt, Emu
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -17,9 +19,16 @@ from PIL import Image
 def parse_document(filepath):
     """
     Parse a .docx file and extract all content in a structured format.
-    Returns a dict with sections, tables, images, and formatting info.
     """
-    doc = Document(filepath)
+    try:
+        doc = Document(filepath)
+    except KeyError as e:
+        if "NULL" in str(e):
+            print(f"Sanitizing corrupt DOCX relationships for {filepath}")
+            _sanitize_docx(filepath)
+            doc = Document(filepath)
+        else:
+            raise e
     result = {
         "filename": os.path.basename(filepath),
         "sections": [],
@@ -445,3 +454,31 @@ def _section_to_text(section):
                 current_page = para_page
             lines.append(para["text"])
     return "\n".join(lines)
+
+
+def _sanitize_docx(filepath):
+    """
+    Sanitize a corrupt docx file by removing relationships pointing to 'NULL'.
+    This addresses the common 'word/NULL' archive KeyErrors on python-docx
+    caused by third-party document generators handling images improperly.
+    """
+    tmp_path = filepath + ".tmp"
+    with zipfile.ZipFile(filepath, 'r') as zin:
+        with zipfile.ZipFile(tmp_path, 'w') as zout:
+            for item in zin.infolist():
+                try:
+                    content = zin.read(item.filename)
+                except KeyError:
+                    continue  # Skip unreadable items
+                
+                # We only care about Relationship XML files
+                if item.filename.endswith('.rels'):
+                    content_str = content.decode('utf-8', errors='ignore')
+                    if 'Target="NULL"' in content_str:
+                        # Remove any Relationship nodes that target 'NULL'
+                        content_str = re.sub(r'<Relationship[^>]*?Target="NULL"[^>]*?/>', '', content_str)
+                        content = content_str.encode('utf-8')
+                zout.writestr(item, content)
+                
+    # Replace the original file with the sanitized version
+    shutil.move(tmp_path, filepath)
