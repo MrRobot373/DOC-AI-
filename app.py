@@ -30,8 +30,24 @@ REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-# In-memory store for review progress and results
-review_store = {}
+# In-memory store (now with file persistence)
+STATE_FILE = os.path.join(UPLOAD_DIR, "review_state.json")
+
+def _load_store():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _save_store(store):
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(store, f)
+    except Exception:
+        pass
 
 
 @app.route("/")
@@ -69,37 +85,53 @@ def list_models():
 
 def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro"):
     """Background worker that runs the full document review."""
+    store = _load_store()
     try:
         # Parse document
-        review_store[review_id]["status"] = "parsing"
-        review_store[review_id]["message"] = "Parsing document..."
-        review_store[review_id]["progress"] = 10
+        if review_id not in store:
+            store[review_id] = {}
+        
+        store[review_id].update({
+            "status": "parsing",
+            "message": "Parsing document...",
+            "progress": 10
+        })
+        _save_store(store)
 
         parsed = parse_document(filepath)
-        review_store[review_id]["progress"] = 20
-        review_store[review_id]["message"] = (
-            f"Document parsed: {parsed['statistics']['total_words']} words, "
-            f"{parsed['statistics']['total_sections']} sections. Starting AI review..."
-        )
+        store = _load_store()
+        store[review_id].update({
+            "progress": 20,
+            "message": f"Document parsed: {parsed['statistics']['total_words']} words, {parsed['statistics']['total_sections']} sections. Starting AI review..."
+        })
+        _save_store(store)
 
         # Create Ollama client
         client = create_ollama_client(api_key, host)
 
         # Progress callback
         def progress_cb(msg):
-            current = review_store[review_id]["progress"]
-            # Increment progress gradually from 20 to 88
+            s = _load_store()
+            if review_id not in s: return
+            current = s[review_id].get("progress", 20)
             new_progress = min(current + 5, 88)
-            review_store[review_id]["progress"] = new_progress
-            review_store[review_id]["message"] = msg
-            review_store[review_id]["status"] = "reviewing"
+            s[review_id].update({
+                "progress": new_progress,
+                "message": msg,
+                "status": "reviewing"
+            })
+            _save_store(s)
 
         # Run review
         findings = review_document(client, model, parsed, progress_callback=progress_cb, review_mode=review_mode)
 
         # Generate report
-        review_store[review_id]["progress"] = 92
-        review_store[review_id]["message"] = f"Found {len(findings)} issues. Generating Excel report..."
+        store = _load_store()
+        store[review_id].update({
+            "progress": 92,
+            "message": f"Found {len(findings)} issues. Generating Excel report..."
+        })
+        _save_store(store)
 
         report_filename = (
             f"Review_Report_{os.path.splitext(original_filename)[0]}"
@@ -118,7 +150,8 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             category_counts[cat] = category_counts.get(cat, 0) + 1
 
         # Mark done
-        review_store[review_id].update({
+        store = _load_store()
+        store[review_id].update({
             "status": "done",
             "message": "Review complete!",
             "progress": 100,
@@ -152,13 +185,17 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
                 for k, v in SEVERITY_LEVELS.items()
             },
         })
+        _save_store(store)
 
     except Exception as e:
-        review_store[review_id].update({
-            "status": "error",
-            "message": str(e),
-            "progress": 0,
-        })
+        store = _load_store()
+        if review_id in store:
+            store[review_id].update({
+                "status": "error",
+                "message": str(e),
+                "progress": 0,
+            })
+            _save_store(store)
     finally:
         # Clean up uploaded file
         try:
@@ -198,11 +235,13 @@ def start_review():
     file.save(filepath)
 
     # Initialize progress
-    review_store[review_id] = {
+    store = _load_store()
+    store[review_id] = {
         "status": "starting",
         "message": "Uploading document...",
         "progress": 5,
     }
+    _save_store(store)
 
     # Start background thread
     thread = threading.Thread(
@@ -218,10 +257,11 @@ def start_review():
 @app.route("/api/progress/<review_id>")
 def get_progress(review_id):
     """Get the progress/result of a review."""
-    if review_id not in review_store:
+    store = _load_store()
+    if review_id not in store:
         return jsonify({"status": "unknown", "message": "Review not found", "progress": 0})
 
-    data = review_store[review_id]
+    data = store[review_id]
 
     # If done, return full results
     if data["status"] == "done":
