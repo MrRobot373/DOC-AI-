@@ -255,17 +255,12 @@ IMPORTANT: You must check for EVERY category listed below. Be thorough and flag 
 
 ## Review Categories:
 1. GRAMMAR_SPELLING: Grammar errors, typos, spelling mistakes, sentence construction problems
-3. TERMINOLOGY_CONSISTENCY: Same concept referred to with different terms (e.g., "Flying cap" vs "Flying Capacitor")
-4. FLOWCHART_DESCRIPTION: Descriptions that contradict or don't match referenced flowcharts/diagrams
-6. UNITS_CALCULATIONS: Missing units, wrong units, calculation errors, incorrect numerical values
-7. FORMATTING_ALIGNMENT: Spacing issues, inconsistent formatting, alignment problems
-8. SIGNAL_VARIABLE_NAMING: Inconsistent signal/variable names (e.g., "Vdclink" vs "Vdc")
-9. TEST_RESULT_COMPLETENESS: Test results missing expected values, actual measurements, or pass/fail
-10. WAVEFORM_DOCUMENTATION: Waveform references missing signal names, probe points, legends
-11. CROSS_REFERENCE_ACCURACY: Wrong figure/section/table references
-12. LOGICAL_CONSISTENCY: Logical errors, contradictions, fault handling mismatches
-14. CONNECTOR_PIN_MAPPING: Connector references without proper IDs
-15. MEASUREMENT_RESOLUTION: Measurement values that seem unclear or at wrong precision
+2. TERMINOLOGY_CONSISTENCY: Same concept referred to with different terms (e.g., "Flying cap" vs "Flying Capacitor")
+3. FORMATTING_ALIGNMENT: Spacing issues, inconsistent formatting, alignment problems
+4. SIGNAL_VARIABLE_NAMING: Inconsistent signal/variable names (e.g., "Vdclink" vs "Vdc")
+5. CONNECTOR_PIN_MAPPING: Connector references without proper IDs
+
+DO NOT check for logical consistency, units, or cross-references here. Focus purely on text, spelling, and phrasing.
 
 ## Document Context:
 {doc_summary[:2000]}
@@ -313,12 +308,12 @@ def _review_consistency_with_llm(client, model, doc_summary):
 ## Full Document Summary:
 {doc_summary[:8000]}
 
-## Focus Areas:
-1. Cross-reference accuracy (do figure/table/section references point to correct items?)
-2. Terminology consistency across the entire document
-4. Overall logical flow and completeness
-6. Consistent use of abbreviations/shortforms (are they defined on first use?)
-7. Consistent formatting patterns across similar sections
+## Focus Areas (ONLY check for these Categories):
+1. CROSS_REFERENCE_ACCURACY: Wrong figure/section/table references pointing to incorrect or missing items.
+2. LOGICAL_CONSISTENCY: Logical errors, high-level contradictions, fault handling mismatches across different sections.
+3. FLOWCHART_DESCRIPTION: Descriptions that contradict referenced flowcharts.
+
+DO NOT check for spelling, grammar, or formatting.
 
 ## Output Format:
 Return a JSON array of findings. Each finding must be:
@@ -367,13 +362,14 @@ def _review_tables_with_llm(client, model, parsed_doc):
         tables_text.append(f"Table {tbl['index'] + 1} ({tbl['num_rows']}×{tbl['num_cols']}):\n{rows_str}")
 
     prompt = f"""You are reviewing TABLES in a technical document. Check each table for:
-1. Missing headers or unclear column names
-2. Empty cells that should have values
-3. Inconsistent units across rows
-4. Test results without pass/fail criteria, actual measurements, or judgments
-5. Numerical values without units
-6. Calculation errors or suspicious values
-7. Consistent formatting across rows
+    
+## Tables Checklist (ONLY check for these Categories):
+1. UNITS_CALCULATIONS: Missing units, wrong units, calculation errors, incorrect numerical values.
+2. TEST_RESULT_COMPLETENESS: Test results without pass/fail criteria, actual measurements, or judgments.
+3. WAVEFORM_DOCUMENTATION: Waveform references or data missing signal names.
+4. MEASUREMENT_RESOLUTION: Measurement values that seem unclear or at the wrong precision.
+
+DO NOT check for spelling errors, grammar, or logically contradictory text inside tables.
 
 ## Tables:
 {chr(10).join(tables_text)}
@@ -457,16 +453,24 @@ def _parse_llm_findings(llm_response, source="llm"):
 
 
 def _deduplicate_findings(findings):
-    """Remove duplicate or very similar findings."""
+    """Remove duplicate or very similar findings using Jaccard word similarity."""
     unique = []
+    stop_words = {'the', 'is', 'in', 'and', 'to', 'a', 'of', 'for', 'it', 'that', 'on', 'this', 'be', 'should', 'are', 'error', 'table', 'section', 'detected', 'typo', 'missing', 'incorrect', 'value', 'be'}
+    
     for f in findings:
         is_duplicate = False
+        words_f = set(re.findall(r'\w+', f.get('comment', '').lower())) - stop_words
+        
         for u in unique:
-            # If category is the same, and they are either in the same section or same page, check similarity
             if f.get('category') == u.get('category'):
-                # Check comment similarity (70% match is considered a duplicate)
-                ratio = difflib.SequenceMatcher(None, f.get('comment', '').lower(), u.get('comment', '').lower()).ratio()
-                if ratio > 0.7:
+                words_u = set(re.findall(r'\w+', u.get('comment', '').lower())) - stop_words
+                if not words_f and not words_u: continue
+                if not words_f.union(words_u): continue
+                
+                ratio = len(words_f.intersection(words_u)) / len(words_f.union(words_u))
+                
+                # If they share >= 35% of their core meaningful words, consider it the same issue
+                if ratio >= 0.35:
                     is_duplicate = True
                     break
         if not is_duplicate:
