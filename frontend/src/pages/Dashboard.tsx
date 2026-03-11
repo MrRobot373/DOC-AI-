@@ -473,7 +473,6 @@ export default function Dashboard({ user }: DashboardProps) {
                                         {f.severity === 'CRITICAL' && <span className="px-2.5 py-1 bg-red-500/15 text-red-400 rounded-md text-xs font-medium">Critical</span>}
                                         {f.severity === 'MAJOR' && <span className="px-2.5 py-1 bg-orange-500/15 text-orange-400 rounded-md text-xs font-medium">Major</span>}
                                         {f.severity === 'MINOR' && <span className="px-2.5 py-1 bg-yellow-500/15 text-yellow-400 rounded-md text-xs font-medium">Minor</span>}
-                                        {f.severity === 'SUGGESTION' && <span className="px-2.5 py-1 bg-blue-500/15 text-blue-400 rounded-md text-xs font-medium">Suggest</span>}
                                     </div>
                                     <div className="space-y-1 w-full">
                                         <div className="flex items-center justify-between text-gray-500 text-xs">

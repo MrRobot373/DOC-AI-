@@ -36,7 +36,6 @@ def generate_excel_report(findings, doc_filename, output_path):
         "CRITICAL": PatternFill(start_color="ffcccc", end_color="ffcccc", fill_type="solid"),
         "MAJOR": PatternFill(start_color="ffe0b2", end_color="ffe0b2", fill_type="solid"),
         "MINOR": PatternFill(start_color="fff9c4", end_color="fff9c4", fill_type="solid"),
-        "SUGGESTION": PatternFill(start_color="e3f2fd", end_color="e3f2fd", fill_type="solid"),
     }
 
     border = Border(
@@ -135,7 +134,7 @@ def generate_excel_report(findings, doc_filename, output_path):
         cell.border = border
 
     total = len(findings) if findings else 1
-    for sev in ["CRITICAL", "MAJOR", "MINOR", "SUGGESTION"]:
+    for sev in ["CRITICAL", "MAJOR", "MINOR"]:
         row += 1
         count = severity_counts.get(sev, 0)
         pct = f"{count / total * 100:.1f}%"
