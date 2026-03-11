@@ -67,7 +67,7 @@ def list_models():
     return jsonify(result)
 
 
-def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model):
+def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro"):
     """Background worker that runs the full document review."""
     try:
         # Parse document
@@ -95,7 +95,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             review_store[review_id]["status"] = "reviewing"
 
         # Run review
-        findings = review_document(client, model, parsed, progress_callback=progress_cb)
+        findings = review_document(client, model, parsed, progress_callback=progress_cb, review_mode=review_mode)
 
         # Generate report
         review_store[review_id]["progress"] = 92
@@ -174,6 +174,7 @@ def start_review():
     api_key = request.form.get("api_key", "")
     host = request.form.get("host", "https://ollama.com")
     model = request.form.get("model", "")
+    review_mode = request.form.get("review_mode", "pro")
 
     if not api_key:
         return jsonify({"success": False, "error": "API key is required"})
@@ -206,7 +207,7 @@ def start_review():
     # Start background thread
     thread = threading.Thread(
         target=_run_review_in_background,
-        args=(review_id, filepath, file.filename, api_key, host, model),
+        args=(review_id, filepath, file.filename, api_key, host, model, review_mode),
         daemon=True,
     )
     thread.start()

@@ -5,10 +5,10 @@ import type { User } from "@supabase/supabase-js"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
     LogOut, Settings, UploadCloud, CheckCircle2, AlertTriangle,
-    FileText, X, User as UserIcon, ChevronDown, ExternalLink
+    FileText, X, ChevronDown, ExternalLink
 } from "lucide-react"
 
 interface DashboardProps {
@@ -39,6 +39,7 @@ export default function Dashboard({ user }: DashboardProps) {
         "deepseek-v3.1:671b-cloud"
     ])
     const [selectedModel, setSelectedModel] = useState("gpt-oss:120b-cloud")
+    const [reviewMode, setReviewMode] = useState<"normal" | "pro">("pro")
 
     // Review State
     const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -134,6 +135,7 @@ export default function Dashboard({ user }: DashboardProps) {
         formData.append('api_key', apiKey)
         formData.append('host', hostUrl)
         formData.append('model', selectedModel || "gpt-oss:120b-cloud")
+        formData.append('review_mode', reviewMode)
         formData.append('document', selectedFile)
 
         try {
@@ -424,7 +426,23 @@ export default function Dashboard({ user }: DashboardProps) {
                         )}
 
                         {/* Actions */}
-                        <div className="flex items-center gap-4 pt-2">
+                        <div className="flex flex-wrap items-center gap-4 pt-2">
+                            {/* Mode Toggle */}
+                            <div className="flex bg-white/5 p-1 rounded-lg border border-white/10 mr-2">
+                                <button
+                                    onClick={() => setReviewMode("normal")}
+                                    className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${reviewMode === "normal" ? "bg-white text-black shadow-lg" : "text-gray-400 hover:text-white"}`}
+                                >
+                                    Normal
+                                </button>
+                                <button
+                                    onClick={() => setReviewMode("pro")}
+                                    className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${reviewMode === "pro" ? "bg-white text-black shadow-lg" : "text-gray-400 hover:text-white"}`}
+                                >
+                                    Pro
+                                </button>
+                            </div>
+
                             <Button
                                 onClick={handleStartReview}
                                 disabled={reviewing || !selectedFile}
