@@ -132,6 +132,7 @@ export default function Dashboard({ user }: DashboardProps) {
         setFindings([])
 
         const formData = new FormData()
+        if (user) formData.append('user_id', user.id)
         formData.append('api_key', apiKey)
         formData.append('host', hostUrl)
         formData.append('model', selectedModel || "gpt-oss:120b-cloud")

@@ -293,14 +293,15 @@ Each finding must be:
   "severity": "CRITICAL|MAJOR|MINOR",
   "page": "Exact page number (e.g., '14') based on the text markers",
   "section": "section reference",
-  "comment": "detailed description of the issue and suggested fix"
+  "comment": "description of the error/issue",
+  "fix": "step-by-step instruction on how to fix this specific error"
 }}
 
 Return ONLY the JSON array, no other text. If no issues found, return [].
 Example:
 [
-  {{"category": "GRAMMAR_SPELLING", "severity": "MINOR", "page": "12", "section": "3.1", "comment": "Typo: 'recieve' should be 'receive'"}},
-  {{"category": "UNITS_CALCULATIONS", "severity": "MAJOR", "page": "15", "section": "4.2", "comment": "Missing unit for voltage value '3.3' - should specify '3.3V' or '3.3 VDC'"}}
+  {{"category": "GRAMMAR_SPELLING", "severity": "MINOR", "page": "12", "section": "3.1", "comment": "Typo: 'recieve' should be 'receive'", "fix": "Change 'recieve' to 'receive'"}},
+  {{"category": "UNITS_CALCULATIONS", "severity": "MAJOR", "page": "15", "section": "4.2", "comment": "Missing unit for voltage value '3.3' - should specify '3.3V' or '3.3 VDC'", "fix": "Add 'V' or 'VDC' after '3.3'"}}
 ]
 """
 
@@ -339,7 +340,8 @@ Return a JSON array of findings. Each finding must be:
   "severity": "CRITICAL|MAJOR|MINOR",
   "page": "page number or 'ALL'",
   "section": "section reference or 'ALL'",
-  "comment": "detailed description of the issue"
+  "comment": "description of the inconsistency",
+  "fix": "how to resolve the contradiction"
 }}
 
 Return ONLY the JSON array. If no issues, return [].
@@ -463,6 +465,7 @@ def _parse_llm_findings(llm_response, source="llm"):
                 "page": str(f.get("page", "-")),
                 "section": str(f.get("section", "-")),
                 "comment": str(f.get("comment", "")),
+                "fix": str(f.get("fix", "Review the content and apply standard technical writing guidelines.")),
                 "source": source,
             })
 

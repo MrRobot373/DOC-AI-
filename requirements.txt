@@ -7,3 +7,4 @@ ollama
 Pillow
 gunicorn
 nltk
+supabase

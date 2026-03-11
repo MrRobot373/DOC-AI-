@@ -10,6 +10,7 @@ import threading
 from datetime import datetime
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
+from supabase import create_client, Client
 
 from doc_parser import parse_document, get_document_summary
 from review_engine import (
@@ -30,7 +31,18 @@ REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-# In-memory store (now with file persistence)
+# Supabase Configuration (Pull from Env)
+SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("VITE_SUPABASE_ANON_KEY") # Use Service Role if possible in production
+
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"Supabase init error: {e}")
+
+# In-memory fallback (now with Supabase sync)
 STATE_FILE = os.path.join(UPLOAD_DIR, "review_state.json")
 
 def _load_store():
@@ -43,11 +55,30 @@ def _load_store():
     return {}
 
 def _save_store(store):
+    # Save to local file
     try:
         with open(STATE_FILE, 'w') as f:
             json.dump(store, f)
     except Exception:
         pass
+    
+    # Sync to Supabase if available
+    if supabase:
+        try:
+            # We store the entire store as a JSON blob for simplicity in this migration
+            # but ideally we'd use a row-per-review table.
+            # Here we just iterate and upsert active reviews.
+            for rid, data in store.items():
+                if data.get("status") in ["done", "error"]:
+                    # These might already be in history, but we ensure sync
+                    pass
+                supabase.table("review_state").upsert({
+                    "id": rid,
+                    "data": data,
+                    "updated_at": "now()"
+                }).execute()
+        except Exception as e:
+            print(f"Supabase sync error: {e}")
 
 
 @app.route("/")
@@ -133,9 +164,10 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         })
         _save_store(store)
 
+        mode_suffix = "Normal" if review_mode == "normal" else "Pro"
         report_filename = (
             f"Review_Report_{os.path.splitext(original_filename)[0]}"
-            f"_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            f"_{mode_suffix}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         )
         report_path = os.path.join(REPORTS_DIR, report_filename)
         generate_excel_report(findings, original_filename, report_path)

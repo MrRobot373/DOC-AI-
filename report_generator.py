@@ -50,8 +50,8 @@ def generate_excel_report(findings, doc_filename, output_path):
     center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
 
     # Headers
-    headers = ["No", "Page", "Section", "Comment", "Category", "Severity", "Date", "Status"]
-    col_widths = [6, 8, 15, 65, 22, 12, 14, 12]
+    headers = ["No", "Page", "Section", "Comment", "Fix", "Category", "Severity", "Date", "Status"]
+    col_widths = [6, 8, 15, 50, 50, 22, 12, 14, 12]
 
     for col_idx, (header, width) in enumerate(zip(headers, col_widths), 1):
         cell = ws.cell(row=1, column=col_idx, value=header)
@@ -80,6 +80,7 @@ def generate_excel_report(findings, doc_filename, output_path):
             finding.get("page", "-"),
             finding.get("section", "-"),
             finding.get("comment", ""),
+            finding.get("fix", ""),
             f"{cat_icon} {cat_name}",
             sev_label,
             review_date,
@@ -90,13 +91,13 @@ def generate_excel_report(findings, doc_filename, output_path):
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.font = body_font
             cell.border = border
-            if col_idx in (1, 2, 6, 7, 8):
+            if col_idx in (1, 2, 7, 8, 9):
                 cell.alignment = center_align
             else:
                 cell.alignment = wrap_align
 
             # Apply severity color to severity column
-            if col_idx == 6:
+            if col_idx == 7:
                 cell.fill = sev_fill
                 cell.font = Font(name="Calibri", size=10, bold=True)
 
