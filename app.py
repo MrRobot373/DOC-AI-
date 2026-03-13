@@ -121,16 +121,25 @@ FEEDBACK_EMAIL = "yash.badgujar@getmysolutions.in"
 
 @app.route("/api/feedback", methods=["POST"])
 def submit_feedback():
-    """Accept user feedback, store in Supabase, and send email notification."""
-    data = request.get_json()
-    user_email = data.get("user_email", "unknown")
-    feedback_type = data.get("type", "general")
-    message = data.get("message", "")
+    """Accept user feedback with optional image, store in Supabase, and send email."""
+    user_email = request.form.get("user_email", "unknown")
+    feedback_type = request.form.get("type", "general")
+    message = request.form.get("message", "")
+    image_file = request.files.get("image")
 
     if not message.strip():
         return jsonify({"success": False, "error": "Feedback message is empty"})
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Save image if provided
+    image_path = None
+    if image_file and image_file.filename:
+        feedback_dir = os.path.join(os.path.dirname(__file__), "feedback_images")
+        os.makedirs(feedback_dir, exist_ok=True)
+        safe_name = f"fb_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{image_file.filename}"
+        image_path = os.path.join(feedback_dir, safe_name)
+        image_file.save(image_path)
 
     # Store in Supabase
     if supabase:
@@ -139,6 +148,7 @@ def submit_feedback():
                 "user_email": user_email,
                 "type": feedback_type,
                 "message": message,
+                "has_image": image_path is not None,
                 "created_at": timestamp,
             }).execute()
         except Exception as e:
@@ -152,6 +162,9 @@ def submit_feedback():
         smtp_pass = os.environ.get("SMTP_PASS", "")
 
         if smtp_user and smtp_pass:
+            from email.mime.base import MIMEBase
+            from email import encoders
+
             msg = MIMEMultipart()
             msg["From"] = smtp_user
             msg["To"] = FEEDBACK_EMAIL
@@ -162,11 +175,21 @@ def submit_feedback():
 From: {user_email}
 Type: {feedback_type.upper()}
 Time: {timestamp}
+Has Screenshot: {"Yes" if image_path else "No"}
 
 Message:
 {message}
 """
             msg.attach(MIMEText(body, "plain"))
+
+            # Attach image if provided
+            if image_path and os.path.exists(image_path):
+                with open(image_path, "rb") as f:
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(image_path)}")
+                    msg.attach(part)
 
             with smtplib.SMTP(smtp_host, smtp_port) as server:
                 server.starttls()

@@ -31,6 +31,8 @@ export default function Dashboard({ user }: DashboardProps) {
     const [feedbackType, setFeedbackType] = useState("bug")
     const [sendingFeedback, setSendingFeedback] = useState(false)
     const [feedbackSent, setFeedbackSent] = useState(false)
+    const [feedbackImage, setFeedbackImage] = useState<File | null>(null)
+    const feedbackImageRef = useRef<HTMLInputElement>(null)
 
     // API Settings State
     const [apiKey, setApiKey] = useState("")
@@ -257,7 +259,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                         API Configuration
                                     </button>
                                     <button
-                                        onClick={() => { setShowProfileMenu(false); setShowFeedbackModal(true); setFeedbackSent(false); setFeedbackText(""); }}
+                                        onClick={() => { setShowProfileMenu(false); setShowFeedbackModal(true); setFeedbackSent(false); setFeedbackText(""); setFeedbackImage(null); }}
                                         className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors"
                                     >
                                         <MessageSquare className="h-4 w-4" />
@@ -432,7 +434,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                     <div>
                                         <Label className="text-gray-400 text-xs mb-2 block">Feedback Type</Label>
                                         <div className="flex gap-2">
-                                            {[{ v: "bug", l: "🐛 Bug Report" }, { v: "feature", l: "🌟 Feature Request" }, { v: "general", l: "💬 General" }].map(t => (
+                                            {[{ v: "bug", l: " Bug Report" }, { v: "feature", l: " Feature Request" }, { v: "general", l: " General" }].map(t => (
                                                 <button key={t.v} onClick={() => setFeedbackType(t.v)}
                                                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${feedbackType === t.v ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'bg-white/5 text-gray-500 border border-white/5 hover:text-gray-300'}`}
                                                 >{t.l}</button>
@@ -448,6 +450,35 @@ export default function Dashboard({ user }: DashboardProps) {
                                             className="w-full h-32 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-gray-600 focus:outline-none focus:border-purple-500/50 resize-none"
                                         />
                                     </div>
+                                    <div>
+                                        <Label className="text-gray-400 text-xs mb-2 block">Attach Screenshot (optional)</Label>
+                                        {feedbackImage ? (
+                                            <div className="relative border border-white/10 rounded-xl overflow-hidden bg-white/5">
+                                                <img src={URL.createObjectURL(feedbackImage)} alt="Preview" className="max-h-40 w-full object-contain" />
+                                                <button
+                                                    onClick={() => setFeedbackImage(null)}
+                                                    className="absolute top-2 right-2 bg-black/70 rounded-full p-1 hover:bg-black"
+                                                >
+                                                    <X className="h-3 w-3 text-white" />
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <button
+                                                onClick={() => feedbackImageRef.current?.click()}
+                                                className="w-full border border-dashed border-white/10 rounded-xl py-4 flex flex-col items-center gap-1 text-gray-500 hover:border-purple-500/30 hover:text-purple-400 transition-colors"
+                                            >
+                                                <UploadCloud className="h-5 w-5" />
+                                                <span className="text-xs">Click to attach an image</span>
+                                            </button>
+                                        )}
+                                        <input
+                                            type="file"
+                                            ref={feedbackImageRef}
+                                            accept="image/*"
+                                            className="hidden"
+                                            onChange={(e) => { if (e.target.files?.[0]) setFeedbackImage(e.target.files[0]) }}
+                                        />
+                                    </div>
                                 </>
                             )}
                         </div>
@@ -460,10 +491,14 @@ export default function Dashboard({ user }: DashboardProps) {
                                     onClick={async () => {
                                         setSendingFeedback(true)
                                         try {
+                                            const formData = new FormData()
+                                            formData.append('user_email', user.email || 'unknown')
+                                            formData.append('type', feedbackType)
+                                            formData.append('message', feedbackText)
+                                            if (feedbackImage) formData.append('image', feedbackImage)
                                             await fetch(`${API_BASE_URL}/api/feedback`, {
                                                 method: "POST",
-                                                headers: { "Content-Type": "application/json" },
-                                                body: JSON.stringify({ user_email: user.email, type: feedbackType, message: feedbackText })
+                                                body: formData
                                             })
                                             setFeedbackSent(true)
                                         } catch { /* silent */ }
