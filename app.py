@@ -48,20 +48,26 @@ if SUPABASE_URL and SUPABASE_KEY:
 # In-memory fallback (now with Supabase sync)
 STATE_FILE = os.path.join(UPLOAD_DIR, "review_state.json")
 
+import time
+
 def _load_store():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, 'r') as f:
-                return json.load(f)
-        except Exception:
-            return {}
+    for _ in range(3):
+        if os.path.exists(STATE_FILE):
+            try:
+                with open(STATE_FILE, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                time.sleep(0.1)
+                continue
     return {}
 
 def _save_store(store):
-    # Save to local file
+    # Save to local file atomically
     try:
-        with open(STATE_FILE, 'w') as f:
+        temp_file = STATE_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
             json.dump(store, f)
+        os.replace(temp_file, STATE_FILE)
     except Exception:
         pass
     
