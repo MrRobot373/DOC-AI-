@@ -159,26 +159,29 @@ def parse_document(filepath):
 def parse_excel(filepath):
     """
     Parse an Excel (.xlsx) file and extract content in a structured format compatible with Word parser.
-    Each sheet is treated as a major section.
+    Uses read_only=True for fast loading of large files.
+    Each sheet is treated as a major section AND as a table entry for the table review pipeline.
     """
     try:
-        wb = openpyxl.load_workbook(filepath, data_only=True)
+        wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
         parsed = {
             "filename": os.path.basename(filepath),
             "sections": [],
             "tables": [],
             "images": [],
             "statistics": {},
+            "formatting": {},  # Required by review engine
             "metadata": {"source_type": "excel"}
         }
 
         total_words = 0
         all_text_lines = []
-        
-        for sheet_name in wb.sheetnames:
+
+        for sheet_idx, sheet_name in enumerate(wb.sheetnames):
             ws = wb[sheet_name]
             paragraphs = []
-            
+            table_rows = []
+
             # Add sheet title as a heading
             paragraphs.append({
                 "text": f"SHEET: {sheet_name}",
@@ -191,11 +194,19 @@ def parse_excel(filepath):
 
             # Extract cell data row by row
             for row in ws.iter_rows(values_only=True):
-                # Filter out empty rows
-                if not any(cell is not None and str(cell).strip() != "" for cell in row):
+                # Convert to strings and strip trailing empty cells
+                cells = [str(cell).strip() if cell is not None else "" for cell in row]
+                # Remove trailing empty cells
+                while cells and cells[-1] == "":
+                    cells.pop()
+                if not cells:
                     continue
-                
-                row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
+
+                # Filter out fully empty rows
+                if not any(c for c in cells):
+                    continue
+
+                row_text = " | ".join(cells)
                 if row_text.strip():
                     total_words += len(row_text.split())
                     paragraphs.append({
@@ -206,6 +217,7 @@ def parse_excel(filepath):
                         "has_image": False
                     })
                     all_text_lines.append(row_text)
+                    table_rows.append(cells)
 
             parsed["sections"].append({
                 "title": sheet_name,
@@ -213,11 +225,25 @@ def parse_excel(filepath):
                 "paragraphs": paragraphs
             })
 
+            # Also register each sheet as a table for the table review pipeline
+            if table_rows:
+                max_cols = max(len(r) for r in table_rows) if table_rows else 0
+                parsed["tables"].append({
+                    "index": sheet_idx,
+                    "name": sheet_name,
+                    "rows": table_rows,
+                    "num_rows": len(table_rows),
+                    "num_cols": max_cols,
+                    "has_header": len(table_rows) > 1,
+                })
+
+        wb.close()
+
         # Set statistics
         parsed["statistics"] = {
             "total_words": total_words,
             "total_sections": len(wb.sheetnames),
-            "total_tables": len(wb.sheetnames), 
+            "total_tables": len(parsed["tables"]),
             "total_images": 0
         }
         parsed["raw_text"] = "\n".join(all_text_lines)
@@ -231,6 +257,7 @@ def parse_excel(filepath):
             "sections": [{"title": "Error", "level": 1, "paragraphs": [{"text": f"Error parsing Excel: {str(e)}", "heading_level": 0, "alignment": "LEFT", "runs": [], "has_image": False}]}],
             "tables": [],
             "images": [],
+            "formatting": {},
             "raw_text": ""
         }
 
