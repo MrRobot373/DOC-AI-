@@ -31,14 +31,12 @@ export default function Dashboard({ user }: DashboardProps) {
     const [hostUrl, setHostUrl] = useState("https://ollama.com")
     const [savingSettings, setSavingSettings] = useState(false)
     const [testResult, setTestResult] = useState<string | null>(null)
-    const [availableModels, setAvailableModels] = useState<string[]>([
-        "gpt-oss:120b-cloud",
+    const [availableModels] = useState<string[]>([
         "qwen3.5:397b-cloud",
-        "minimax-m2.5:cloud",
         "kimi-k2-thinking:cloud",
-        "deepseek-v3.1:671b-cloud"
+        "glm-5:cloud"
     ])
-    const [selectedModel, setSelectedModel] = useState("gpt-oss:120b-cloud")
+    const [selectedModel, setSelectedModel] = useState("qwen3.5:397b-cloud")
     const [reviewMode, setReviewMode] = useState<"normal" | "pro">("pro")
 
     // Review State
@@ -102,8 +100,6 @@ export default function Dashboard({ user }: DashboardProps) {
 
             if (data.success) {
                 setTestResult("Connection Successful!")
-                setAvailableModels(data.models || [])
-                if (data.models && data.models.length > 0) setSelectedModel(data.models[0])
             } else {
                 setTestResult("Error: " + data.error)
             }

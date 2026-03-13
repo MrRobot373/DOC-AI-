@@ -142,62 +142,9 @@ def parse_document(filepath):
 
     result["raw_text"] = "\n".join(all_text_lines)
 
-    # Parse paragraphs and tables in sequence to track context
-    all_elements = [] # To keep track of content order
-    
-    # Track the last heading seen
-    last_heading = "(Document Header / Preamble)"
-    
-    # We need to iterate through paragraphs and tables in document order
-    # doc.paragraphs only gives paragraphs
-    # doc.tables only gives tables
-    # doc.element.body gives everything in order
-    
-    body = doc._element.body
-    for child in body:
-        if child.tag.endswith('p'):
-            para = Paragraph(child, doc)
-            text = para.text.strip()
-            if not text: continue
-            
-            style_name = para.style.name if para.style else ""
-            heading_level = _get_heading_level(style_name, text)
-            
-            if heading_level and heading_level <= 3:
-                last_heading = text
-        
-        elif child.tag.endswith('tbl'):
-            # It's a table
-            pass
-
-    # Actually, let's stick to a simpler approach: 
-    # Since we already have the section tracking in the paragraph loop, 
-    # we can modify the main parser to pass the current heading context.
-    
-    # RE-IMPLEMENTING the paragraph loop more robustly
-    current_section_heading = "(Document Header / Preamble)"
-    
-    # Re-iterate or use index tracking? 
-    # Let's use the parent element search in _extract_table but make it better.
-    
+    # Parse tables
     for tbl_idx, table in enumerate(doc.tables):
-        # Find parent heading by searching siblings
-        parent_heading = "(Document Header / Preamble)"
-        try:
-            curr = table._element
-            while curr is not None:
-                curr = curr.getprevious()
-                if curr is not None and curr.tag.endswith('p'):
-                    p = Paragraph(curr, doc)
-                    text = p.text.strip()
-                    style_name = p.style.name if p.style else ""
-                    if _get_heading_level(style_name, text):
-                        parent_heading = text
-                        break
-        except Exception:
-            pass
-            
-        table_data = _extract_table(table, tbl_idx, parent_heading)
+        table_data = _extract_table(table, tbl_idx)
         result["tables"].append(table_data)
 
     # Extract images
@@ -392,7 +339,7 @@ def _paragraph_has_image(para):
     return False
 
 
-def _extract_table(table, tbl_idx, parent_heading="(Document Header / Preamble)"):
+def _extract_table(table, tbl_idx):
     """Extract table content and check formatting."""
     name = f"Table {tbl_idx + 1}"
     try:
@@ -418,7 +365,6 @@ def _extract_table(table, tbl_idx, parent_heading="(Document Header / Preamble)"
     return {
         "index": tbl_idx,
         "name": name,
-        "parent_section": parent_heading,
         "rows": rows_data,
         "num_rows": len(rows_data),
         "num_cols": len(rows_data[0]) if rows_data else 0,

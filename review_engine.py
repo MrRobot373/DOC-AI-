@@ -381,14 +381,11 @@ def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
     tables_text = []
     for tbl in parsed_doc["tables"][:15]:  # Limit to first 15 tables
         tbl_name = tbl.get("name", f"Table {tbl['index'] + 1}")
-        parent_sec = tbl.get("parent_section", "(Document Header / Preamble)")
-        full_tbl_path = f"{parent_sec} > {tbl_name}"
-        
         rows_str = "\n".join(
             f"  Row {i}: {' | '.join(c[:150] for c in row)}"
             for i, row in enumerate(tbl["rows"][:50])
         )
-        tables_text.append(f"--- {full_tbl_path} ({tbl['num_rows']}×{tbl['num_cols']}) ---\n{rows_str}")
+        tables_text.append(f"--- {tbl_name} ({tbl['num_rows']}×{tbl['num_cols']}) ---\n{rows_str}")
 
     prompt = f"""You are reviewing TABLES in a technical document. Check each table for:
 1. Missing headers or unclear column names
@@ -411,7 +408,7 @@ Return a JSON array of findings. Each finding must be:
   "category": "CATEGORY_ID",
   "severity": "CRITICAL|MAJOR|MINOR",
   "page": "-",
-  "section": "Exact Table Name with Section (e.g., '3.1 List of Components > Table 1')",
+  "section": "Exact Table Name (from the --- Name --- marker)",
   "comment": "detailed description",
   "fix": "step-by-step instruction on how to fix this specific error"
 }}
