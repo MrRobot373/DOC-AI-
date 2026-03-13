@@ -124,8 +124,8 @@ export default function Dashboard({ user }: DashboardProps) {
 
         const ext = file.name.split('.').pop()?.toLowerCase()
         if (fileType === 'excel') {
-            if (ext !== 'xlsx' && ext !== 'xls') {
-                alert("Please upload an Excel file (.xlsx or .xls)")
+            if (ext !== 'xlsx') {
+                alert("Please upload an Excel file (.xlsx)")
                 return
             }
         } else {
@@ -597,12 +597,12 @@ export default function Dashboard({ user }: DashboardProps) {
                                     <UploadCloud className="h-7 w-7 text-gray-500 group-hover:text-gray-300 transition-colors" />
                                 </div>
                                 <h3 className="text-lg font-medium text-gray-200 mb-1">Click to upload document</h3>
-                                <p className="text-sm text-gray-500">Supports {fileType === 'excel' ? '.xlsx, .xls' : '.docx, .doc'}</p>
+                                <p className="text-sm text-gray-500">Supports {fileType === 'excel' ? '.xlsx' : '.docx, .doc'}</p>
                                 <input
                                     type="file"
                                     ref={fileInputRef}
                                     onChange={handleFileChange}
-                                    accept={fileType === 'excel' ? ".xlsx,.xls" : ".docx,.doc"}
+                                    accept={fileType === 'excel' ? ".xlsx" : ".docx,.doc"}
                                     className="hidden"
                                 />
                             </div>
