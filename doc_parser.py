@@ -471,10 +471,10 @@ def get_document_summary(parsed):
     lines.append(f"Total Images: {parsed['statistics']['total_images']}")
 
     # Formatting metadata
-    fmt = parsed["formatting"]
-    if fmt["default_font"]:
+    fmt = parsed.get("formatting", {})
+    if fmt.get("default_font"):
         lines.append(f"Default Font: {fmt['default_font']}")
-    if fmt["default_size"]:
+    if fmt.get("default_size"):
         lines.append(f"Default Font Size: {fmt['default_size']}pt")
     margins = fmt.get("page_margins", {})
     if margins:
@@ -484,7 +484,7 @@ def get_document_summary(parsed):
 
     # Sections with content
     for section in parsed["sections"]:
-        heading = section["heading"]
+        heading = section.get("heading", section.get("title", "Unknown"))
         level = section["level"]
         page = section.get("page", 1)
         prefix = "#" * max(level, 1) if level else "##"
@@ -502,10 +502,10 @@ def get_document_summary(parsed):
 
             # Check font consistency
             for run in para.get("runs", []):
-                if "font" in run and fmt["default_font"] and run["font"] != fmt["default_font"]:
+                if "font" in run and fmt.get("default_font") and run["font"] != fmt["default_font"]:
                     notes.append(f"[FONT MISMATCH: {run['font']} vs default {fmt['default_font']}]")
                     break
-                if "size_pt" in run and fmt["default_size"] and run["size_pt"] != fmt["default_size"]:
+                if "size_pt" in run and fmt.get("default_size") and run["size_pt"] != fmt["default_size"]:
                     if para["heading_level"] is None:  # Only flag non-headings
                         notes.append(f"[SIZE MISMATCH: {run['size_pt']}pt vs default {fmt['default_size']}pt]")
                         break
