@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import {
     LogOut, Settings, UploadCloud, CheckCircle2, AlertTriangle,
-    FileText, X, ChevronDown, ExternalLink
+    FileText, X, ChevronDown, ExternalLink, MessageSquare, HelpCircle, Send
 } from "lucide-react"
 
 interface DashboardProps {
@@ -25,6 +25,12 @@ export default function Dashboard({ user }: DashboardProps) {
 
     // Settings modal
     const [showSettingsModal, setShowSettingsModal] = useState(false)
+    const [showFeedbackModal, setShowFeedbackModal] = useState(false)
+    const [showHelpModal, setShowHelpModal] = useState(false)
+    const [feedbackText, setFeedbackText] = useState("")
+    const [feedbackType, setFeedbackType] = useState("bug")
+    const [sendingFeedback, setSendingFeedback] = useState(false)
+    const [feedbackSent, setFeedbackSent] = useState(false)
 
     // API Settings State
     const [apiKey, setApiKey] = useState("")
@@ -251,6 +257,21 @@ export default function Dashboard({ user }: DashboardProps) {
                                         API Configuration
                                     </button>
                                     <button
+                                        onClick={() => { setShowProfileMenu(false); setShowFeedbackModal(true); setFeedbackSent(false); setFeedbackText(""); }}
+                                        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors"
+                                    >
+                                        <MessageSquare className="h-4 w-4" />
+                                        Send Feedback
+                                    </button>
+                                    <button
+                                        onClick={() => { setShowProfileMenu(false); setShowHelpModal(true) }}
+                                        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors"
+                                    >
+                                        <HelpCircle className="h-4 w-4" />
+                                        How to Use
+                                    </button>
+                                    <div className="border-t border-white/5 my-1"></div>
+                                    <button
                                         onClick={handleLogout}
                                         className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors"
                                     >
@@ -374,6 +395,128 @@ export default function Dashboard({ user }: DashboardProps) {
                             <Button onClick={handleSaveSettings} disabled={savingSettings || !apiKey} className="bg-white text-black hover:bg-gray-200 px-6">
                                 {savingSettings ? "Testing..." : "Test & Save"}
                             </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ─── Feedback Modal ─── */}
+            {showFeedbackModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowFeedbackModal(false)}>
+                    <div
+                        className="bg-[#0a0a0a] border border-white/10 rounded-2xl w-full max-w-lg mx-4 shadow-2xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
+                            <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                                    <MessageSquare className="h-4 w-4 text-purple-400" />
+                                </div>
+                                <div>
+                                    <h3 className="text-sm font-semibold text-white">Send Feedback</h3>
+                                    <p className="text-xs text-gray-500">Let us know how we can improve</p>
+                                </div>
+                            </div>
+                            <button onClick={() => setShowFeedbackModal(false)} className="p-1 rounded-lg hover:bg-white/5"><X className="h-4 w-4 text-gray-500" /></button>
+                        </div>
+
+                        <div className="px-6 py-5 space-y-4">
+                            {feedbackSent ? (
+                                <div className="text-center py-8">
+                                    <CheckCircle2 className="h-12 w-12 text-green-400 mx-auto mb-3" />
+                                    <h4 className="text-lg font-semibold text-white mb-1">Thank you!</h4>
+                                    <p className="text-sm text-gray-400">Your feedback has been sent to the DOC-AI team.</p>
+                                </div>
+                            ) : (
+                                <>
+                                    <div>
+                                        <Label className="text-gray-400 text-xs mb-2 block">Feedback Type</Label>
+                                        <div className="flex gap-2">
+                                            {[{ v: "bug", l: "🐛 Bug Report" }, { v: "feature", l: "🌟 Feature Request" }, { v: "general", l: "💬 General" }].map(t => (
+                                                <button key={t.v} onClick={() => setFeedbackType(t.v)}
+                                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${feedbackType === t.v ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'bg-white/5 text-gray-500 border border-white/5 hover:text-gray-300'}`}
+                                                >{t.l}</button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <Label className="text-gray-400 text-xs mb-2 block">Your Feedback</Label>
+                                        <textarea
+                                            value={feedbackText}
+                                            onChange={(e) => setFeedbackText(e.target.value)}
+                                            placeholder="Describe the issue or suggestion in detail..."
+                                            className="w-full h-32 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-gray-600 focus:outline-none focus:border-purple-500/50 resize-none"
+                                        />
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        {!feedbackSent && (
+                            <div className="px-6 py-4 border-t border-white/5 flex items-center justify-end gap-3">
+                                <Button variant="ghost" onClick={() => setShowFeedbackModal(false)} className="text-gray-400 hover:text-white hover:bg-white/5">Cancel</Button>
+                                <Button
+                                    disabled={sendingFeedback || !feedbackText.trim()}
+                                    onClick={async () => {
+                                        setSendingFeedback(true)
+                                        try {
+                                            await fetch(`${API_BASE_URL}/api/feedback`, {
+                                                method: "POST",
+                                                headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ user_email: user.email, type: feedbackType, message: feedbackText })
+                                            })
+                                            setFeedbackSent(true)
+                                        } catch { /* silent */ }
+                                        setSendingFeedback(false)
+                                    }}
+                                    className="bg-purple-600 text-white hover:bg-purple-500 px-6 flex items-center gap-2"
+                                >
+                                    <Send className="h-3.5 w-3.5" />
+                                    {sendingFeedback ? "Sending..." : "Send Feedback"}
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* ─── How to Use Modal ─── */}
+            {showHelpModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowHelpModal(false)}>
+                    <div
+                        className="bg-[#0a0a0a] border border-white/10 rounded-2xl w-full max-w-lg mx-4 shadow-2xl max-h-[80vh] overflow-y-auto"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 sticky top-0 bg-[#0a0a0a] z-10">
+                            <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                                    <HelpCircle className="h-4 w-4 text-blue-400" />
+                                </div>
+                                <div>
+                                    <h3 className="text-sm font-semibold text-white">How to Use DOC-AI</h3>
+                                    <p className="text-xs text-gray-500">Quick start guide</p>
+                                </div>
+                            </div>
+                            <button onClick={() => setShowHelpModal(false)} className="p-1 rounded-lg hover:bg-white/5"><X className="h-4 w-4 text-gray-500" /></button>
+                        </div>
+
+                        <div className="px-6 py-5 space-y-5 text-sm text-gray-400">
+                            {[
+                                { n: "1", title: "Configure API Key", desc: "Click your profile icon → \"API Configuration\". Paste your Ollama API Key and click \"Test & Save\"." },
+                                { n: "2", title: "Select File Type", desc: "Choose between \"Word Document\" (.docx) or \"Excel Sheet\" (.xlsx) using the toggle above the upload area." },
+                                { n: "3", title: "Upload Your File", desc: "Click the dashed upload box to browse your computer and select a file." },
+                                { n: "4", title: "Choose Review Mode", desc: "Normal Mode: Checks grammar, terminology, and units (faster). Pro Mode: Deep 12-category technical review." },
+                                { n: "5", title: "Start AI Review", desc: "Click \"Start AI Review\" and wait 1-5 minutes. A live progress bar tracks the analysis." },
+                                { n: "6", title: "Download Report", desc: "Once complete, click \"Download Excel Report\" to get a professional report with findings, severity levels, and fix instructions." },
+                            ].map(step => (
+                                <div key={step.n} className="flex gap-3">
+                                    <div className="h-6 w-6 rounded-full bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0 text-xs font-bold">{step.n}</div>
+                                    <div><span className="text-white font-medium">{step.title}:</span> {step.desc}</div>
+                                </div>
+                            ))}
+                            <div className="border-t border-white/5 pt-4 text-xs text-gray-500">
+                                For issues or questions, use the "Send Feedback" option in your profile menu.
+                            </div>
                         </div>
                     </div>
                 </div>

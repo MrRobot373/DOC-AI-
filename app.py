@@ -7,6 +7,9 @@ import os
 import uuid
 import json
 import threading
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
@@ -112,6 +115,70 @@ def list_models():
 
     result = test_connection(api_key, host)
     return jsonify(result)
+
+
+FEEDBACK_EMAIL = "yash.badgujar@getmysolutions.in"
+
+@app.route("/api/feedback", methods=["POST"])
+def submit_feedback():
+    """Accept user feedback, store in Supabase, and send email notification."""
+    data = request.get_json()
+    user_email = data.get("user_email", "unknown")
+    feedback_type = data.get("type", "general")
+    message = data.get("message", "")
+
+    if not message.strip():
+        return jsonify({"success": False, "error": "Feedback message is empty"})
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Store in Supabase
+    if supabase:
+        try:
+            supabase.table("feedback").insert({
+                "user_email": user_email,
+                "type": feedback_type,
+                "message": message,
+                "created_at": timestamp,
+            }).execute()
+        except Exception as e:
+            print(f"Supabase feedback insert error: {e}")
+
+    # Send email notification
+    try:
+        smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+        smtp_user = os.environ.get("SMTP_USER", "")
+        smtp_pass = os.environ.get("SMTP_PASS", "")
+
+        if smtp_user and smtp_pass:
+            msg = MIMEMultipart()
+            msg["From"] = smtp_user
+            msg["To"] = FEEDBACK_EMAIL
+            msg["Subject"] = f"[DOC-AI Feedback] {feedback_type.upper()} from {user_email}"
+
+            body = f"""New feedback received on DOC-AI Platform
+
+From: {user_email}
+Type: {feedback_type.upper()}
+Time: {timestamp}
+
+Message:
+{message}
+"""
+            msg.attach(MIMEText(body, "plain"))
+
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_user, FEEDBACK_EMAIL, msg.as_string())
+            print(f"Feedback email sent to {FEEDBACK_EMAIL}")
+        else:
+            print(f"SMTP not configured. Feedback stored in Supabase only.")
+    except Exception as e:
+        print(f"Email send error: {e}")
+
+    return jsonify({"success": True, "message": "Feedback received"})
 
 
 def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc"):
