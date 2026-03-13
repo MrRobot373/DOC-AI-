@@ -132,14 +132,23 @@ def submit_feedback():
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Save image if provided
-    image_path = None
+    # Upload image to Supabase Storage if provided
+    image_url = None
+    image_bytes = None
+    image_filename = None
     if image_file and image_file.filename:
-        feedback_dir = os.path.join(os.path.dirname(__file__), "feedback_images")
-        os.makedirs(feedback_dir, exist_ok=True)
-        safe_name = f"fb_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{image_file.filename}"
-        image_path = os.path.join(feedback_dir, safe_name)
-        image_file.save(image_path)
+        image_bytes = image_file.read()
+        image_filename = f"fb_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{image_file.filename}"
+        if supabase:
+            try:
+                supabase.storage.from_("feedback-images").upload(
+                    image_filename, image_bytes,
+                    {"content-type": image_file.content_type or "image/png"}
+                )
+                image_url = supabase.storage.from_("feedback-images").get_public_url(image_filename)
+                print(f"Feedback image uploaded: {image_url}")
+            except Exception as e:
+                print(f"Supabase image upload error: {e}")
 
     # Store in Supabase
     if supabase:
@@ -148,7 +157,7 @@ def submit_feedback():
                 "user_email": user_email,
                 "type": feedback_type,
                 "message": message,
-                "has_image": image_path is not None,
+                "image_url": image_url,
                 "created_at": timestamp,
             }).execute()
         except Exception as e:
@@ -175,7 +184,7 @@ def submit_feedback():
 From: {user_email}
 Type: {feedback_type.upper()}
 Time: {timestamp}
-Has Screenshot: {"Yes" if image_path else "No"}
+Screenshot: {image_url if image_url else "None"}
 
 Message:
 {message}
@@ -183,13 +192,12 @@ Message:
             msg.attach(MIMEText(body, "plain"))
 
             # Attach image if provided
-            if image_path and os.path.exists(image_path):
-                with open(image_path, "rb") as f:
-                    part = MIMEBase("application", "octet-stream")
-                    part.set_payload(f.read())
-                    encoders.encode_base64(part)
-                    part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(image_path)}")
-                    msg.attach(part)
+            if image_bytes and image_filename:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(image_bytes)
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", f"attachment; filename={image_filename}")
+                msg.attach(part)
 
             with smtplib.SMTP(smtp_host, smtp_port) as server:
                 server.starttls()
