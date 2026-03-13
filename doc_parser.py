@@ -220,9 +220,11 @@ def parse_excel(filepath):
                     table_rows.append(cells)
 
             parsed["sections"].append({
-                "title": sheet_name,
+                "heading": sheet_name,
                 "level": 1,
-                "paragraphs": paragraphs
+                "paragraphs": paragraphs,
+                "page": 1,
+                "start_index": sheet_idx,
             })
 
             # Also register each sheet as a table for the table review pipeline
@@ -572,7 +574,7 @@ def get_section_chunks(parsed, max_chars=6000):
 
 def _section_to_text(section):
     """Convert a section dict to readable text."""
-    lines = [f"[Section: {section['heading']} (Starts on Page {section.get('page', 1)})]"]
+    lines = [f"[Section: {section.get('heading', section.get('title', 'Unknown'))} (Starts on Page {section.get('page', 1)})]"]
     current_page = None
     for para in section["paragraphs"]:
         if para["text"]:
