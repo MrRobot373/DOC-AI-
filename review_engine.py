@@ -314,8 +314,9 @@ Example:
         )
 
         reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
-        return _parse_llm_findings(reply, "llm_chunk")
+        return _parse_llm_findings(reply, f"llm_chunk_{chunk_num}")
     except Exception as e:
+        print(f"Error during chunk {chunk_num} review: {str(e)}")
         return []
 
 
@@ -425,6 +426,7 @@ Return ONLY the JSON array. If no issues, return [].
         reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
         return _parse_llm_findings(reply, "llm_tables")
     except Exception as e:
+        print(f"Error during table review: {str(e)}")
         return []
 
 
@@ -478,8 +480,37 @@ def _parse_llm_findings(llm_response, source="llm"):
             })
 
         return valid_findings
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as e:
+        print(f"JSON Parsing Error: {e}")
+        print(f"Attempted to parse: {json_text}")
+        
+        # Fallback regex extraction for loosely formatted JSON dicts inside the array
+        valid_findings = []
+        try:
+            # Look for blocks looking like {"category": "...", ... }
+            dict_strings = re.findall(r'\{[^{}]*\}', json_text)
+            for ds in dict_strings:
+                try:
+                    # Clean up common LLM trailing commas
+                    cleaned_ds = re.sub(r',\s*\}', '}', ds)
+                    f = json.loads(cleaned_ds)
+                    if isinstance(f, dict) and "category" in f:
+                        valid_findings.append({
+                            "category": f.get("category", "GRAMMAR_SPELLING"),
+                            "severity": f.get("severity", "MINOR").upper(),
+                            "page": str(f.get("page", "-")),
+                            "section": str(f.get("section", "-")),
+                            "comment": str(f.get("comment", "")),
+                            "fix": str(f.get("fix", "Review the content and apply standard technical writing guidelines.")),
+                            "source": source + "_regex_fallback",
+                        })
+                except Exception:
+                    continue
+        except Exception:
+            pass
+            
+        print(f"Regex fallback extracted {len(valid_findings)} findings.")
+        return valid_findings
 
 
 def _deduplicate_findings(findings):
