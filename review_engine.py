@@ -431,86 +431,73 @@ Return ONLY the JSON array. If no issues, return [].
 
 
 def _parse_llm_findings(llm_response, source="llm"):
-    """Parse LLM response into structured findings."""
-    # Try to extract JSON from response
+    """Parse LLM response into structured findings with extreme robustness."""
+    valid_findings = []
     text = llm_response.strip()
 
-    # Remove markdown code blocks if present
-    if "```json" in text:
-        text = text.split("```json")[1].split("```")[0].strip()
-    elif "```" in text:
-        text = text.split("```")[1].split("```")[0].strip()
-
-    # Find the JSON array
-    start = text.find("[")
-    end = text.rfind("]")
-    if start == -1 or end == -1:
-        return []
-
-    json_text = text[start : end + 1]
-
+    # Strategy 1: Attempt exact JSON array extraction
     try:
-        findings = json.loads(json_text)
-        if not isinstance(findings, list):
-            return []
+        start = text.find("[")
+        end = text.rfind("]")
+        if start != -1 and end != -1:
+            json_text = text[start : end + 1]
+            findings = json.loads(json_text)
+            if isinstance(findings, list):
+                valid_findings.extend(findings)
+    except Exception:
+        pass
 
-        # Validate and normalize each finding
-        valid_findings = []
-        for f in findings:
-            if not isinstance(f, dict):
+    # Strategy 2: If Strategy 1 failed, forcefully rip `{...}` objects out
+    if not valid_findings:
+        # Match anything between { and } that looks like a dictionary
+        # We replace unescaped internal newlines to help json.loads parse them
+        dict_strings = re.findall(r'\{[^{}]*\}', text)
+        for ds in dict_strings:
+            try:
+                # Fix trailing commas before closing brace
+                cleaned_ds = re.sub(r',\s*\}', '}', ds)
+                # Cleanup control characters
+                cleaned_ds = cleaned_ds.replace('\n', ' ').replace('\r', '')
+                f = json.loads(cleaned_ds)
+                if isinstance(f, dict):
+                    valid_findings.append(f)
+            except Exception:
                 continue
-            category = f.get("category", "GRAMMAR_SPELLING")
-            if category not in REVIEW_CATEGORIES:
-                category = "GRAMMAR_SPELLING"
 
-            severity = f.get("severity", "MINOR").upper()
-            if severity == "SUGGESTION":
-                continue  # Skip suggestions entirely as requested
-            if severity not in SEVERITY_LEVELS:
-                severity = "MINOR"
-
-            valid_findings.append({
-                "category": category,
-                "severity": severity,
-                "page": str(f.get("page", "-")),
-                "section": str(f.get("section", "-")),
-                "comment": str(f.get("comment", "")),
-                "fix": str(f.get("fix", "Review the content and apply standard technical writing guidelines.")),
-                "source": source,
-            })
-
-        return valid_findings
-    except json.JSONDecodeError as e:
-        print(f"JSON Parsing Error: {e}")
-        print(f"Attempted to parse: {json_text}")
-        
-        # Fallback regex extraction for loosely formatted JSON dicts inside the array
-        valid_findings = []
-        try:
-            # Look for blocks looking like {"category": "...", ... }
-            dict_strings = re.findall(r'\{[^{}]*\}', json_text)
-            for ds in dict_strings:
-                try:
-                    # Clean up common LLM trailing commas
-                    cleaned_ds = re.sub(r',\s*\}', '}', ds)
-                    f = json.loads(cleaned_ds)
-                    if isinstance(f, dict) and "category" in f:
-                        valid_findings.append({
-                            "category": f.get("category", "GRAMMAR_SPELLING"),
-                            "severity": f.get("severity", "MINOR").upper(),
-                            "page": str(f.get("page", "-")),
-                            "section": str(f.get("section", "-")),
-                            "comment": str(f.get("comment", "")),
-                            "fix": str(f.get("fix", "Review the content and apply standard technical writing guidelines.")),
-                            "source": source + "_regex_fallback",
-                        })
-                except Exception:
-                    continue
-        except Exception:
-            pass
+    # Clean and validate whatever we managed to extract
+    normalized = []
+    for f in valid_findings:
+        if not isinstance(f, dict):
+            continue
             
-        print(f"Regex fallback extracted {len(valid_findings)} findings.")
-        return valid_findings
+        category = f.get("category", "GRAMMAR_SPELLING")
+        if category not in REVIEW_CATEGORIES:
+            category = "GRAMMAR_SPELLING"
+
+        severity = str(f.get("severity", "MINOR")).upper()
+        if severity == "SUGGESTION":
+            continue  # Skip suggestions 
+        if severity not in SEVERITY_LEVELS:
+            severity = "MINOR"
+
+        comment = str(f.get("comment", "")).strip()
+        if not comment:
+            continue
+
+        normalized.append({
+            "category": category,
+            "severity": severity,
+            "page": str(f.get("page", "-")),
+            "section": str(f.get("section", "-")),
+            "comment": comment,
+            "fix": str(f.get("fix", "Review the content and apply standard technical writing guidelines.")),
+            "source": source,
+        })
+
+    if not normalized:
+        print(f"[{source}] Failed to extract ANY valid findings. Raw LLM output was:\n{text[:1000]}")
+
+    return normalized
 
 
 def _deduplicate_findings(findings):
