@@ -124,8 +124,8 @@ export default function Dashboard({ user }: DashboardProps) {
 
         const ext = file.name.split('.').pop()?.toLowerCase()
         if (fileType === 'excel') {
-            if (ext !== 'xlsx') {
-                alert("Please upload an Excel file (.xlsx)")
+            if (ext !== 'xlsx' && ext !== 'xls') {
+                alert("Please upload an Excel file (.xlsx or .xls)")
                 return
             }
         } else {
@@ -538,7 +538,7 @@ export default function Dashboard({ user }: DashboardProps) {
                         <div className="px-6 py-5 space-y-5 text-sm text-gray-400">
                             {[
                                 { n: "1", title: "Configure API Key", desc: "Click your profile icon → \"API Configuration\". Paste your Ollama API Key and click \"Test & Save\"." },
-                                { n: "2", title: "Select File Type", desc: "Ensure you are uploading a \"Word Document\" (.docx). (Excel support is temporarily hidden)." },
+                                { n: "2", title: "Select File Type", desc: "Choose between \"Word Document\" (.docx) or \"Excel Sheet\" (.xlsx) using the toggle above the upload area." },
                                 { n: "3", title: "Upload Your File", desc: "Click the dashed upload box to browse your computer and select a file." },
                                 { n: "4", title: "Choose Review Mode", desc: "Normal Mode: Checks grammar, terminology, and units (faster). Pro Mode: Deep 12-category technical review." },
                                 { n: "5", title: "Start AI Review", desc: "Click \"Start AI Review\" and wait 1-5 minutes. A live progress bar tracks the analysis." },
@@ -565,11 +565,11 @@ export default function Dashboard({ user }: DashboardProps) {
                     <div className="space-y-2">
                         <h2 className="text-2xl font-bold tracking-tight text-white">Document Review</h2>
                         <p className="text-sm text-gray-500">
-                            Upload a Word document and get an AI review.
+                            Upload a {fileType === 'excel' ? 'Excel sheet' : 'Word document'} and get an AI review.
                         </p>
                     </div>
 
-                    {/* <div className="flex bg-white/5 p-1 rounded-xl border border-white/5">
+                    <div className="flex bg-white/5 p-1 rounded-xl border border-white/5">
                         <button
                             onClick={() => { setFileType('doc'); setSelectedFile(null); }}
                             className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${fileType === 'doc' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'text-gray-500 hover:text-gray-300'}`}
@@ -582,7 +582,7 @@ export default function Dashboard({ user }: DashboardProps) {
                         >
                             Excel Sheet
                         </button>
-                    </div> */}
+                    </div>
                 </div>
 
                 <Card className="w-full border-white/10 bg-white/[0.02] shadow-none">
@@ -597,12 +597,12 @@ export default function Dashboard({ user }: DashboardProps) {
                                     <UploadCloud className="h-7 w-7 text-gray-500 group-hover:text-gray-300 transition-colors" />
                                 </div>
                                 <h3 className="text-lg font-medium text-gray-200 mb-1">Click to upload document</h3>
-                                <p className="text-sm text-gray-500">Supports .docx, .doc</p>
+                                <p className="text-sm text-gray-500">Supports {fileType === 'excel' ? '.xlsx, .xls' : '.docx, .doc'}</p>
                                 <input
                                     type="file"
                                     ref={fileInputRef}
                                     onChange={handleFileChange}
-                                    accept=".docx,.doc"
+                                    accept={fileType === 'excel' ? ".xlsx,.xls" : ".docx,.doc"}
                                     className="hidden"
                                 />
                             </div>

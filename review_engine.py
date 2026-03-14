@@ -265,9 +265,6 @@ def _run_local_checks(parsed_doc):
                 "source": "local",
             })
 
-    return findings
-
-
 
 def _review_chunk_with_llm(client, model, chunk_text, doc_summary, chunk_num, active_categories):
     """Send a document chunk to the LLM for comprehensive review."""

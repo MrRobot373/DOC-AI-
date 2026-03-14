@@ -159,29 +159,26 @@ def parse_document(filepath):
 def parse_excel(filepath):
     """
     Parse an Excel (.xlsx) file and extract content in a structured format compatible with Word parser.
-    Uses read_only=True for fast loading of large files.
-    Each sheet is treated as a major section AND as a table entry for the table review pipeline.
+    Each sheet is treated as a major section.
     """
     try:
-        wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+        wb = openpyxl.load_workbook(filepath, data_only=True)
         parsed = {
             "filename": os.path.basename(filepath),
             "sections": [],
             "tables": [],
             "images": [],
             "statistics": {},
-            "formatting": {},  # Required by review engine
             "metadata": {"source_type": "excel"}
         }
 
         total_words = 0
         all_text_lines = []
-
-        for sheet_idx, sheet_name in enumerate(wb.sheetnames):
+        
+        for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
             paragraphs = []
-            table_rows = []
-
+            
             # Add sheet title as a heading
             paragraphs.append({
                 "text": f"SHEET: {sheet_name}",
@@ -194,19 +191,11 @@ def parse_excel(filepath):
 
             # Extract cell data row by row
             for row in ws.iter_rows(values_only=True):
-                # Convert to strings and strip trailing empty cells
-                cells = [str(cell).strip() if cell is not None else "" for cell in row]
-                # Remove trailing empty cells
-                while cells and cells[-1] == "":
-                    cells.pop()
-                if not cells:
+                # Filter out empty rows
+                if not any(cell is not None and str(cell).strip() != "" for cell in row):
                     continue
-
-                # Filter out fully empty rows
-                if not any(c for c in cells):
-                    continue
-
-                row_text = " | ".join(cells)
+                
+                row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
                 if row_text.strip():
                     total_words += len(row_text.split())
                     paragraphs.append({
@@ -217,35 +206,18 @@ def parse_excel(filepath):
                         "has_image": False
                     })
                     all_text_lines.append(row_text)
-                    table_rows.append(cells)
 
             parsed["sections"].append({
-                "heading": sheet_name,
+                "title": sheet_name,
                 "level": 1,
-                "paragraphs": paragraphs,
-                "page": 1,
-                "start_index": sheet_idx,
+                "paragraphs": paragraphs
             })
-
-            # Also register each sheet as a table for the table review pipeline
-            if table_rows:
-                max_cols = max(len(r) for r in table_rows) if table_rows else 0
-                parsed["tables"].append({
-                    "index": sheet_idx,
-                    "name": sheet_name,
-                    "rows": table_rows,
-                    "num_rows": len(table_rows),
-                    "num_cols": max_cols,
-                    "has_header": len(table_rows) > 1,
-                })
-
-        wb.close()
 
         # Set statistics
         parsed["statistics"] = {
             "total_words": total_words,
             "total_sections": len(wb.sheetnames),
-            "total_tables": len(parsed["tables"]),
+            "total_tables": len(wb.sheetnames), 
             "total_images": 0
         }
         parsed["raw_text"] = "\n".join(all_text_lines)
@@ -259,7 +231,6 @@ def parse_excel(filepath):
             "sections": [{"title": "Error", "level": 1, "paragraphs": [{"text": f"Error parsing Excel: {str(e)}", "heading_level": 0, "alignment": "LEFT", "runs": [], "has_image": False}]}],
             "tables": [],
             "images": [],
-            "formatting": {},
             "raw_text": ""
         }
 
@@ -473,10 +444,10 @@ def get_document_summary(parsed):
     lines.append(f"Total Images: {parsed['statistics']['total_images']}")
 
     # Formatting metadata
-    fmt = parsed.get("formatting", {})
-    if fmt.get("default_font"):
+    fmt = parsed["formatting"]
+    if fmt["default_font"]:
         lines.append(f"Default Font: {fmt['default_font']}")
-    if fmt.get("default_size"):
+    if fmt["default_size"]:
         lines.append(f"Default Font Size: {fmt['default_size']}pt")
     margins = fmt.get("page_margins", {})
     if margins:
@@ -486,7 +457,7 @@ def get_document_summary(parsed):
 
     # Sections with content
     for section in parsed["sections"]:
-        heading = section.get("heading", section.get("title", "Unknown"))
+        heading = section["heading"]
         level = section["level"]
         page = section.get("page", 1)
         prefix = "#" * max(level, 1) if level else "##"
@@ -504,10 +475,10 @@ def get_document_summary(parsed):
 
             # Check font consistency
             for run in para.get("runs", []):
-                if "font" in run and fmt.get("default_font") and run["font"] != fmt["default_font"]:
+                if "font" in run and fmt["default_font"] and run["font"] != fmt["default_font"]:
                     notes.append(f"[FONT MISMATCH: {run['font']} vs default {fmt['default_font']}]")
                     break
-                if "size_pt" in run and fmt.get("default_size") and run["size_pt"] != fmt["default_size"]:
+                if "size_pt" in run and fmt["default_size"] and run["size_pt"] != fmt["default_size"]:
                     if para["heading_level"] is None:  # Only flag non-headings
                         notes.append(f"[SIZE MISMATCH: {run['size_pt']}pt vs default {fmt['default_size']}pt]")
                         break
@@ -574,7 +545,7 @@ def get_section_chunks(parsed, max_chars=6000):
 
 def _section_to_text(section):
     """Convert a section dict to readable text."""
-    lines = [f"[Section: {section.get('heading', section.get('title', 'Unknown'))} (Starts on Page {section.get('page', 1)})]"]
+    lines = [f"[Section: {section['heading']} (Starts on Page {section.get('page', 1)})]"]
     current_page = None
     for para in section["paragraphs"]:
         if para["text"]:
