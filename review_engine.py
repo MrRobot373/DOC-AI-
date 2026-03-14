@@ -272,10 +272,10 @@ def _review_chunk_with_llm(client, model, chunk_text, doc_summary, chunk_num, ac
     cat_list = "\n".join([f"{cid}. {REVIEW_CATEGORIES[cid]['name']}: {REVIEW_CATEGORIES[cid]['description']}" for cid in active_categories if cid in REVIEW_CATEGORIES])
 
     prompt = f"""You are a senior technical document reviewer for automotive/embedded systems engineering documents.
-Review the following section of a technical document and find ALL issues.
+Review the following section of a technical document and find ALL issues. Pay close attention to every detail in the text.
 
 IMPORTANT: You must check for ONLY the categories listed below.
-CRITICAL: Do NEVER flag errors regarding "incomplete sentences", "abruptly ending text", "garbled text", or "nonsensical values" (e.g., 'xzccccxc', 'PCBDddduiouioDriver'). These are artifacts of the text extraction or test data. Ignore them entirely.
+NOTE: If you find dummy text, placeholder text, or nonsensical strings (e.g., 'xzccccxc', 'PCBDddduiouioDriver'), you MUST flag them as errors, as they indicate incomplete or erroneous documentation.
 
 ## Review Categories:
 {cat_list}
@@ -335,7 +335,7 @@ def _review_consistency_with_llm(client, model, doc_summary):
 6. Consistent use of abbreviations/shortforms (are they defined on first use?)
 7. Consistent formatting patterns across similar sections
 
-CRITICAL: Do NEVER flag errors regarding "incomplete sentences", "abruptly ending text", "garbled text", or "nonsensical values". Ignore extraction artifacts completely.
+NOTE: If you find dummy text, placeholder text, or nonsensical strings, flag them as errors. Do not ignore them.
 
 ## Output Format:
 Return a JSON array of findings. Each finding must be:
@@ -384,7 +384,7 @@ def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
         tbl_name = tbl.get("name", f"Table {tbl['index'] + 1}")
         rows_str = "\n".join(
             f"  Row {i}: {' | '.join(c[:150] for c in row)}"
-            for i, row in enumerate(tbl["rows"][:50])
+            for i, row in enumerate(tbl["rows"][:100]) # Increased to 100 rows
         )
         tables_text.append(f"--- {tbl_name} ({tbl['num_rows']}×{tbl['num_cols']}) ---\n{rows_str}")
 
@@ -396,9 +396,9 @@ def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
 5. Numerical values without units
 6. Calculation errors or suspicious values
 7. Consistent formatting across rows
+8. Dummy text, placeholder text, or nonsensical strings (flag these as errors).
 
 IMPORTANT: Do NOT report errors stating that a table is "incomplete" or "truncated". Assume data may legitimately continue on another page.
-CRITICAL: Do NEVER flag errors regarding "garbled text" or "nonsensical values" (e.g., 'xzccccxc', 'PCBDddduiouioDriver'). Ignore placeholder or extraction artifact text completely.
 
 ## Tables:
 {chr(10).join(tables_text)}
@@ -431,73 +431,86 @@ Return ONLY the JSON array. If no issues, return [].
 
 
 def _parse_llm_findings(llm_response, source="llm"):
-    """Parse LLM response into structured findings with extreme robustness."""
-    valid_findings = []
+    """Parse LLM response into structured findings."""
+    # Try to extract JSON from response
     text = llm_response.strip()
 
-    # Strategy 1: Attempt exact JSON array extraction
+    # Remove markdown code blocks if present
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
+
+    # Find the JSON array
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1:
+        return []
+
+    json_text = text[start : end + 1]
+
     try:
-        start = text.find("[")
-        end = text.rfind("]")
-        if start != -1 and end != -1:
-            json_text = text[start : end + 1]
-            findings = json.loads(json_text)
-            if isinstance(findings, list):
-                valid_findings.extend(findings)
-    except Exception:
-        pass
+        findings = json.loads(json_text)
+        if not isinstance(findings, list):
+            return []
 
-    # Strategy 2: If Strategy 1 failed, forcefully rip `{...}` objects out
-    if not valid_findings:
-        # Match anything between { and } that looks like a dictionary
-        # We replace unescaped internal newlines to help json.loads parse them
-        dict_strings = re.findall(r'\{[^{}]*\}', text)
-        for ds in dict_strings:
-            try:
-                # Fix trailing commas before closing brace
-                cleaned_ds = re.sub(r',\s*\}', '}', ds)
-                # Cleanup control characters
-                cleaned_ds = cleaned_ds.replace('\n', ' ').replace('\r', '')
-                f = json.loads(cleaned_ds)
-                if isinstance(f, dict):
-                    valid_findings.append(f)
-            except Exception:
+        # Validate and normalize each finding
+        valid_findings = []
+        for f in findings:
+            if not isinstance(f, dict):
                 continue
+            category = f.get("category", "GRAMMAR_SPELLING")
+            if category not in REVIEW_CATEGORIES:
+                category = "GRAMMAR_SPELLING"
 
-    # Clean and validate whatever we managed to extract
-    normalized = []
-    for f in valid_findings:
-        if not isinstance(f, dict):
-            continue
+            severity = f.get("severity", "MINOR").upper()
+            if severity == "SUGGESTION":
+                continue  # Skip suggestions entirely as requested
+            if severity not in SEVERITY_LEVELS:
+                severity = "MINOR"
+
+            valid_findings.append({
+                "category": category,
+                "severity": severity,
+                "page": str(f.get("page", "-")),
+                "section": str(f.get("section", "-")),
+                "comment": str(f.get("comment", "")),
+                "fix": str(f.get("fix", "Review the content and apply standard technical writing guidelines.")),
+                "source": source,
+            })
+
+        return valid_findings
+    except json.JSONDecodeError as e:
+        print(f"JSON Parsing Error: {e}")
+        print(f"Attempted to parse: {json_text}")
+        
+        # Fallback regex extraction for loosely formatted JSON dicts inside the array
+        valid_findings = []
+        try:
+            # Look for blocks looking like {"category": "...", ... }
+            dict_strings = re.findall(r'\{[^{}]*\}', json_text)
+            for ds in dict_strings:
+                try:
+                    # Clean up common LLM trailing commas
+                    cleaned_ds = re.sub(r',\s*\}', '}', ds)
+                    f = json.loads(cleaned_ds)
+                    if isinstance(f, dict) and "category" in f:
+                        valid_findings.append({
+                            "category": f.get("category", "GRAMMAR_SPELLING"),
+                            "severity": f.get("severity", "MINOR").upper(),
+                            "page": str(f.get("page", "-")),
+                            "section": str(f.get("section", "-")),
+                            "comment": str(f.get("comment", "")),
+                            "fix": str(f.get("fix", "Review the content and apply standard technical writing guidelines.")),
+                            "source": source + "_regex_fallback",
+                        })
+                except Exception:
+                    continue
+        except Exception:
+            pass
             
-        category = f.get("category", "GRAMMAR_SPELLING")
-        if category not in REVIEW_CATEGORIES:
-            category = "GRAMMAR_SPELLING"
-
-        severity = str(f.get("severity", "MINOR")).upper()
-        if severity == "SUGGESTION":
-            continue  # Skip suggestions 
-        if severity not in SEVERITY_LEVELS:
-            severity = "MINOR"
-
-        comment = str(f.get("comment", "")).strip()
-        if not comment:
-            continue
-
-        normalized.append({
-            "category": category,
-            "severity": severity,
-            "page": str(f.get("page", "-")),
-            "section": str(f.get("section", "-")),
-            "comment": comment,
-            "fix": str(f.get("fix", "Review the content and apply standard technical writing guidelines.")),
-            "source": source,
-        })
-
-    if not normalized:
-        print(f"[{source}] Failed to extract ANY valid findings. Raw LLM output was:\n{text[:1000]}")
-
-    return normalized
+        print(f"Regex fallback extracted {len(valid_findings)} findings.")
+        return valid_findings
 
 
 def _deduplicate_findings(findings):

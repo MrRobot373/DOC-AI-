@@ -142,6 +142,33 @@ def parse_document(filepath):
 
     result["raw_text"] = "\n".join(all_text_lines)
 
+    # Extract headers and footers
+    header_footer_text = []
+    try:
+        for i, section in enumerate(doc.sections):
+            if hasattr(section, 'header') and section.header:
+                for para in section.header.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        header_footer_text.append(text)
+            if hasattr(section, 'footer') and section.footer:
+                for para in section.footer.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        header_footer_text.append(text)
+    except Exception as e:
+        print(f"Error extracting headers/footers: {e}")
+
+    if header_footer_text:
+        result["sections"].append({
+            "heading": "(Document Headers & Footers)",
+            "level": 0,
+            "paragraphs": [{"index": 0, "text": t, "style": "", "heading_level": None, "format": {}, "runs": [], "has_image": False, "page": 1} for t in header_footer_text],
+            "start_index": 0,
+            "page": 1,
+        })
+        result["raw_text"] += "\n" + "\n".join(header_footer_text)
+
     # Parse tables
     for tbl_idx, table in enumerate(doc.tables):
         table_data = _extract_table(table, tbl_idx)
@@ -491,10 +518,10 @@ def get_document_summary(parsed):
         lines.append("\n## TABLES IN DOCUMENT")
         for tbl in parsed["tables"]:
             lines.append(f"\n### Table {tbl['index'] + 1} ({tbl['num_rows']}×{tbl['num_cols']})")
-            for row_idx, row in enumerate(tbl["rows"][:5]):  # First 5 rows
+            for row_idx, row in enumerate(tbl["rows"][:20]):  # First 20 rows instead of 5
                 lines.append(f"  Row {row_idx}: {' | '.join(r[:60] for r in row)}")
-            if tbl["num_rows"] > 5:
-                lines.append(f"  ... ({tbl['num_rows'] - 5} more rows)")
+            if tbl["num_rows"] > 20:
+                lines.append(f"  ... ({tbl['num_rows'] - 20} more rows)")
 
     # Images
     if parsed["images"]:
