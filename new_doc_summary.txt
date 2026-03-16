@@ -1,0 +1,1205 @@
+# Document: Ultra small _Lab_test results repor_13_03_2026.docx
+Total Words: 7156
+Total Sections: 120
+Total Tables: 19
+Total Images: 13
+Default Font: Calibri
+Default Font Size: 11.0pt
+Page Margins (inches): Top=0.75, Bottom=0.59, Left=1.1, Right=1.18
+
+
+## (Document Header / Preamble) (Page 1)
+  TICO Ultra Small – Lab prototype tests report [SIZE MISMATCH: 16.0pt vs default 11.0pt]
+  About this document [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  This document presents the details of the functional testing performed on the ULTRA SMALL lab prototype test. It begins with a general introduction outlining the purpose of the tests, the test modules and methodologies employed, and the overall test setup used for functional testing. 
+  The following sections describe the tests conducted on ULTRA SMALL phase 4, explaining how the respective functions were verified. The final sections present the consolidated test results, key observations, and overall conclusions from the testing activities. 
+  Scope [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  The scope of this testing is ULTRA SMALL lab prototype functional testing. The report captures details of the tests executed with their objectives, set-up, methods, criteria, condition, results and conclusion. 
+  Intended audience [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  This document is intended for the hardware design team, including the hardware design architect and hardware engineers involved in circuit development, testing, and validation, as well as the software team involved in firmware, driver development, and system integration. It is also useful for stakeholders seeking detailed insights into the design process, performance analysis, and potential improvements for the circuit under test. 
+  List of pending items [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  Reference documents [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  Revision history [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  Table of Content 
+
+# 1.	General introduction	4 (Page 3)
+  1.	General introduction	4 
+
+## 1.1	Purpose of the tests	4 (Page 3)
+  1.1	Purpose of the tests	4 
+
+## 1.2	Ultrasmall test Equipment’s	4 (Page 3)
+  1.2	Ultrasmall test Equipment’s	4 
+
+## 1.3	Test set-up Ultrasmall functional testing	5 (Page 3)
+  1.3	Test set-up Ultrasmall functional testing	5 
+
+# 2	HV OBC DAB (DC–DC)	7 (Page 3)
+  2	HV OBC DAB (DC–DC)	7 
+
+## 2.1	Test criteria	7 (Page 3)
+  2.1	Test criteria	7 
+
+## 2.2	Test setup	7 (Page 3)
+  2.2	Test setup	7 
+
+## 2.3	Test procedures	8 (Page 3)
+  2.3	Test procedures	8 
+
+## 2.4	Test result	8 (Page 3)
+  2.4	Test result	8 
+
+## 2.5	Conclusion	10 (Page 3)
+  2.5	Conclusion	10 
+
+# 3	DCDC DAB Operation Verification (HV→LV)	11 (Page 3)
+  3	DCDC DAB Operation Verification (HV→LV)	11 
+
+## 3.1	Test criteria	11 (Page 3)
+  3.1	Test criteria	11 
+
+## 3.2	Test setup	11 (Page 3)
+  3.2	Test setup	11 
+
+## 3.3	Test procedures	12 (Page 3)
+  3.3	Test procedures	12 
+
+## 3.4	Test results	12 (Page 3)
+  3.4	Test results	12 
+
+## 3.5	Conclusion	13 (Page 3)
+  3.5	Conclusion	13 
+
+# 4	AC→DC PFC (AC–DC boost) stage	14 (Page 3)
+  4	AC→DC PFC (AC–DC boost) stage	14 
+
+## 4.1	Test criteria	14 (Page 3)
+  4.1	Test criteria	14 
+
+## 4.2	Test setup	14 (Page 3)
+  4.2	Test setup	14 
+
+## 4.3	Test procedures	15 (Page 3)
+  4.3	Test procedures	15 
+
+## 4.4	Test results	15 (Page 3)
+  4.4	Test results	15 
+
+## 4.5	Conclusion	16 (Page 3)
+  4.5	Conclusion	16 
+
+# 5	OBC/DCDC Switching Frequency and Gate Driver Shutdown Verification	17 (Page 3)
+  5	OBC/DCDC Switching Frequency and Gate Driver Shutdown Verification	17 
+
+## 5.1	Test criteria	17 (Page 3)
+  5.1	Test criteria	17 
+
+## 5.2	Test procedures	17 (Page 3)
+  5.2	Test procedures	17 
+
+## 5.3	Test results	18 (Page 3)
+  5.3	Test results	18 
+
+# 6	Dielectric Withstand and Insulation Resistance Verification	19 (Page 3)
+  6	Dielectric Withstand and Insulation Resistance Verification	19 
+
+## 6.1	Test criteria	19 (Page 3)
+  6.1	Test criteria	19 
+
+## 6.2	Test procedures	19 (Page 3)
+  6.2	Test procedures	19 
+
+## 6.3	Test results	20 (Page 3)
+  6.3	Test results	20 
+
+# 7	AC and HV Self-Discharge Verification (Power-Off Voltage Decay)	21 (Page 3)
+  7	AC and HV Self-Discharge Verification (Power-Off Voltage Decay)	21 
+
+## 7.1	Test criteria	21 (Page 3)
+  7.1	Test criteria	21 
+
+## 7.2	Test procedures	21 (Page 3)
+  7.2	Test procedures	21 
+
+## 7.3	Test results	22 (Page 3)
+  7.3	Test results	22 
+
+# 8	AC Input Overvoltage/Undervoltage Protection and Auto-Recovery Verification	23 (Page 3)
+  8	AC Input Overvoltage/Undervoltage Protection and Auto-Recovery Verification	23 
+
+## 8.1	Test criteria	23 (Page 3)
+  8.1	Test criteria	23 
+
+## 8.2	Test procedures	23 (Page 3)
+  8.2	Test procedures	23 
+
+## 8.3	Test results	24 (Page 3)
+  8.3	Test results	24 
+
+# 9	HV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification	25 (Page 3)
+  9	HV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification	25 
+
+## 9.1	Test criteria	25 (Page 3)
+  9.1	Test criteria	25 
+
+## 9.2	Test procedures	25 (Page 3)
+  9.2	Test procedures	25 
+
+## 9.3	Test results	26 (Page 3)
+  9.3	Test results	26 
+
+# 10	LV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification	27 (Page 3)
+  10	LV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification	27 
+
+## 10.1	Test criteria	27 (Page 3)
+  10.1	Test criteria	27 
+
+## 10.2	Test procedures	27 (Page 3)
+  10.2	Test procedures	27 
+
+## 10.3	Test results	28 (Page 3)
+  10.3	Test results	28 
+
+# 11	LV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification	29 (Page 3)
+  11	LV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification	29 
+
+## 11.1	Test criteria	29 (Page 3)
+  11.1	Test criteria	29 
+
+## 11.2	Test procedures	29 (Page 3)
+  11.2	Test procedures	29 
+
+## 11.3	Test results	31 (Page 3)
+  11.3	Test results	31 
+
+# 12	Thermal Derating Verification for OBC, PFC, and DCDC Hotspots	32 (Page 3)
+  12	Thermal Derating Verification for OBC, PFC, and DCDC Hotspots	32 
+
+## 12.1	Test criteria	32 (Page 3)
+  12.1	Test criteria	32 
+
+## 12.2	Test procedures	32 (Page 3)
+  12.2	Test procedures	32 
+
+## 12.3	Test results	33 (Page 3)
+  12.3	Test results	33 
+
+# 13	Power-On Dead Short Detection and Latch Shutdown Verification	34 (Page 3)
+  13	Power-On Dead Short Detection and Latch Shutdown Verification	34 
+
+## 13.1	Test criteria	34 (Page 3)
+  13.1	Test criteria	34 
+
+## 13.2	Test procedures	34 (Page 3)
+  13.2	Test procedures	34 
+
+## 13.3	Test results	35 (Page 3)
+  13.3	Test results	35 
+
+# 14	SRS test mapping	36 (Page 3)
+  14	SRS test mapping	36 
+
+# General introduction (Page 5)
+  General introduction 
+
+## Purpose of the tests (Page 5)
+  Purpose of the tests 
+  Purpose of the test is to verify the defined functionalities of the power PCB, driver PCB and controller PCB circuit, against specifications (SRS and the respective data sheets) and to identify any potential issues or areas for improvement. 
+  Across the Controller PCB, Driver PCB, and Power PCB, testing emphasizes output accuracy, response speed, noise performance, and stability under lab conditions. 
+  Note: Lab conditions in this document mean that the PCB is tested in the laboratory at room temperature, without extra mechanical or environmental stress, PCB is out of case and no colling system was used. 
+  Controller PCB:
+This board has a microcontroller, communication interfaces (CAN, LIN, debug), and I/O for relays, gate drivers, temperature sensors, current sensors, and EEPROM/FLASH. 
+  Driver PCB:
+This board has the gate-driver circuits and isolated driver power supplies used to drive the GaN and SiC power devices. 
+  Power PCB:
+This board has the main high-power stages (PFC, DCDC, OBC), the GaN/SiC power switches, current and voltage-measurement circuits, filters, DC-link parts, and discharge circuits. 
+
+## Ultrasmall test Equipment’s (Page 5)
+  Ultrasmall test Equipment’s 
+  Table 1 Equipment’s details for Ultrasmall test 
+
+## Test set-up Ultrasmall functional testing (Page 7)
+  Test set-up Ultrasmall functional testing 
+  Figure 1 Ultrasmall functional test setup with all 
+  Figure 2 PCB level circuit block diagram [SIZE MISMATCH: 9.0pt vs default 11.0pt]
+  V- Voltage Sensor [SIZE MISMATCH: 9.0pt vs default 11.0pt]
+  A-current Sensor [SIZE MISMATCH: 9.0pt vs default 11.0pt]
+  T- Temperature Sensor [SIZE MISMATCH: 9.0pt vs default 11.0pt]
+
+# HV OBC DAB (DC–DC) (Page 10)
+  HV OBC DAB (DC–DC) 
+
+## Test criteria (Page 10)
+  Test criteria 
+  To verify the OBC DAB (DC–DC) stage operates correctly in open-loop at 200 kHz with 400 V DC input and transfers power to the HV output. 
+  Table 2 Expected output for HV OBC DAB (DC–DC) 
+
+## Test setup (Page 10)
+  Test setup 
+  Figure 3 HV OBC DAB (DC–DC) test setup in system level block diagram 
+  Table 3 HV OBC DAB (DC–DC) test setup 
+
+## Test procedures (Page 11)
+  Test procedures 
+  Step 1: Ultra Small Setup 
+  Place the fully assembled Ultra Small unit on an insulated test bench. 
+  Verify that the DC power supply, load, and oscilloscope are switched OFF before making any electrical connections. 
+  Step 2: Wiring Setup 
+  Connect the DC Power Supply with display to the Ultra Small input terminals: 
+  DC Power Supply (+) → DC_LINK+ 
+  DC Power Supply (−) → DC bus negative / system ground 
+  Connect the Load with display to the output terminals: 
+  Load (+) → HV_PF 
+  Load (−) → HV_DC− 
+  Connect the oscilloscope probes at the following points (probe ground connected to system ground 
+  Primary Voltage Measurement
+Positive probe tip → C2062 – L2002 junction 
+  Leakage Inductor Current Measurement
+Current probe → Inductor L2002 
+  Secondary Voltage Measurement
+Positive probe tip → Transformer secondary top node (T2000) 
+  Output Current Measurement
+Current probe → Output line between HV_DC+ and load 
+  Step 3: Set DC Input to Nominal 
+  Apply DC input and turn ON: 
+  Set DC source to 400 Vdc 
+  Step 4: Configure HV Load 
+  Set HV load to 800 Vdc. 
+  Adjust electronic load to represent 3.91kW load condition. 
+  Step 9: Power-Down Sequence 
+  Reduce DC input to 0 Vdc. 
+  Turn OFF DC source. 
+  Turn OFF HV load. 
+  Disconnect all measurement equipment. 
+
+## Test result (Page 11)
+  Test result 
+  Title: OBC DAB Operation – 4.08kW Power Transfer 
+  Evidence Type: Oscilloscope Screenshot / Test Measurement Record 
+  Description:
+The test verifies the operation of the OBC DAB converter at 4.08kW load with 400 V DC input. The measured output voltage is 798 V with an output current of 4.90 A. The input current recorded is 10.2 A and the converter operates at 200 kHz switching frequency. The measured power loss is 170 W, and the calculated efficiency is 95.8%. 
+  Note: 
+  Light Blue → Secondary Voltage Measurement 
+  Yellow → Primary Voltage Measurement 
+  Pink → Leakage inductor current Measurement 
+  Blue → output current Measurement 
+  Figure 4 OBC DAB Operation at 4.08kW Power Transfer 
+  Title: OBC DAB Operation – 8.096 kW Power Transfer 
+  Evidence Type: Oscilloscope Screenshot / Test Measurement Record 
+  Description:
+The test verifies the OBC DAB converter performance at a higher load condition of 8.096kW with 400 V DC input. The measured output voltage is 764V with an output current of 10.2A, while the input current is 20.24A. The converter operates at 200kHz switching frequency with measured power loss of 304W and efficiency of 96.2%. 
+  Light Blue → Secondary Voltage Measurement 
+  Yellow → Primary Voltage Measurement 
+  Pink → Leakage inductor current 
+  Blue → output current 
+  Figure 5 OBC DAB Operation at 8.096kW Power Transfer 
+  Table 4 OBC DAB operation test result verification table 
+
+## Conclusion (Page 12)
+  Conclusion 
+  The OBC DAB test was performed at 400 V DC input and 200 kHz. The converter achieved 800 V class output (measured 798 V); therefore, the input DC voltage and output voltage target requirements were met. However, the test has not yet reached the rated 11 kW condition. The measured currents (Iin = 4.90 A and Iout = 10.2 A) are below the required rated currents (Iin ≥ 27.5 A and Iout ≥ 13.75 A) needed to achieve 11 kW. Hence, the test is PASS for voltage verification and fail for full-power (11 kW) 
+
+# DCDC DAB Operation Verification (HV→LV) (Page 14)
+  DCDC DAB Operation Verification (HV→LV) 
+
+## Test criteria (Page 14)
+  Test criteria 
+  To verify the DCDC DAB (HV→LV) meets its rated specification: it should convert 800 V DC input to 13 V output and deliver 3.3 kW output power, corresponding to approximately 4.37 A input current and 275 A output current, at the designed switching frequency. 
+  Table 5 Expected output for HV DCDC DAB (HV–LV) 
+
+## Test setup (Page 14)
+  Test setup 
+  Figure 6 HV to LV DCDC DAB (DC–DC) test setup in system level block diagram 
+  Figure 7 HV to LV DCDC DAB (DC–DC) test setup 
+
+## Test procedures (Page 15)
+  Test procedures 
+  Step 1: DCDC Setup 
+  • Place the assembled DCDC DAB unit on an insulated test bench.
+• Ensure all power supplies and test instruments are OFF before making connections.
+• Verify the unit is mechanically secured and properly grounded. 
+  Step 2: Wiring Setup 
+  Input Power Connection 
+  Connect the DC power supply with display to the DCDC input terminals: 
+  DC Supply (+) → HV_DC + 
+  DC Supply (−) → HV_DC − 
+  Output Load Connection 
+  Connect the electronic load with display to the DCDC output: 
+  Load Positive (+) → DCDC_IP+ 
+  Load Negative (−) → GND 
+  Connect oscilloscope probes to record the following signals: [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  Primary voltage measurement
+Positive probe tip → Primary transformer node [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  Secondary voltage measurement
+Positive probe tip → Secondary transformer node [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  DC output current measurement
+Current probe → Output line between DCDC_IP+ and Load [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  Step 3: Set DC Input to Nominal 
+  • Set DC source to 560 Vdc and turn ON.
+• Enable DCDC operation. 
+  Step 4: Configure Load 
+  • Set output voltage to 13 Vdc.
+• Adjust electronic load to achieve 2.128 Kw load condition:
+Step 5: Record Measurements 
+  • Record Vin, Iin, Vout, Iout. 
+  Step 6: Power-Down Sequence 
+  • Reduce load to 0 A and turn OFF load.
+• Reduce DC input to 0 Vdc and turn OFF DC source.
+• Disconnect all measurement equipment. 
+
+## Test results (Page 15)
+  Test results 
+  Title: DCDC DAB Input Voltage and Current Measurement 
+  Evidence Type: Oscilloscope Screenshot 
+  Description:
+The DCDC DAB was tested with 560 V DC input and 13 V output. It delivered 147.4 A output current (1.92 Kw) with 90.1% efficiency at 200 kHz switching. 
+  Note: 
+  Light Blue → Secondary Voltage Measurement 
+  Yellow → Primary Voltage Measurement 
+  Pink → Output current Measurement 
+  Figure 8 DCDC DAB Operation at 2.128KW Power Transfer 
+  Table 6 Expected output for HV DCDC DAB (HV–LV) test result verification table 
+
+## Conclusion (Page 16)
+  Conclusion 
+  The DCDC DAB converter was tested with 560 V DC input and 13 V output under a 1.92 kW load condition. The converter delivered 147.4 A output current with an efficiency of 90.1% at 200 kHz switching frequency. The system operated stably during the test. However, the test power is below the rated 3.3 kW, and further testing will be performed to verify full-load operation. 
+
+# AC→DC PFC (AC–DC boost) stage (Page 18)
+  AC→DC PFC (AC–DC boost) stage 
+
+## Test criteria (Page 18)
+  Test criteria 
+  To verify the PFC (AC–DC boost) stage operates correctly in open-loop at 200 kHz and boosts the AC input to approximately 400 V DC output. 
+  Table 7 Expected output for AC→DC PFC (AC–DC boost) stage 
+
+## Test setup (Page 18)
+  Test setup 
+  Figure 9 AC→DC PFC (AC–DC boost) test setup in system level block diagram 
+  Figure 10 AC→DC PFC (AC–DC boost) stage test setup 
+
+## Test procedures (Page 19)
+  Test procedures 
+  Step 1: PFC Setup 
+  • Place the assembled PFC unit on an insulated test bench.
+• Ensure all power supplies and test instruments are OFF before making connections.
+• Verify the unit is mechanically secured and properly grounded. 
+  Step 2: Wiring Setup 
+  AC Input Connection 
+  Connect the programmable AC source to the PFC input terminals: 
+  AC Source Line (P) → AC_IN_L 
+  AC Source Neutral (N) → AC_IN_N 
+  Output Load Connection 
+  Connect the DC electronic load to the PFC output: 
+  Load Positive (+) → DC_LINK+ 
+  Load Negative (−) → DC_LINK− 
+  Measurement Setup 
+  Connect oscilloscope probes to record: 
+  AC input voltage (Vin) → Probe tip at AC_IN_L 
+  AC input current (Iin) → Current probe on AC input line (AC_IN_L) 
+  DC output voltage (Vout) → Probe tip at DC_LINK+ 
+  DC output current (Iout) → Current probe on DC_LINK+ output line to load 
+  Step 3: Set AC Input to Nominal 
+  • Set AC source to 203.3 Vac (as per tested condition) and turn ON.
+• Enable PFC operation in open-loop.
+• Confirm switching frequency is 200 kHz. 
+  Step 4: Configure Load 
+  • Adjust DC load so that output voltage is around 400 Vdc.
+• Adjust load to achieve required test power conditions:
+–~1.978 kW test point 
+  Step 5: Record Measurements 
+  AC input voltage (Vin) 
+  AC input current (Iin) 
+  DC output voltage (Vout) 
+  DC output current (Iout) 
+  Step 6: Power-Down Sequence 
+  • Reduce load to 0 A and turn OFF load.
+• Disable PFC operation.
+• Reduce AC input to 0 Vac and turn OFF AC source.
+• Disconnect all measurement equipment. 
+
+## Test results (Page 19)
+  Test results 
+  Title: PFC Operation Verification (~2 kW Load) 
+  Evidence Type: Oscilloscope Screenshot 
+  Description:
+The PFC converter was tested with 203.3 V AC input and boosted the output to 403.63 V DC. The system delivered approximately 1.98 kW power with 4.9 A output current, 10.32 A input current, and 94.3% efficiency at 200 kHz switching frequency. The waveforms confirm stable operation of the PFC stage. 
+  Note: 
+  Light Blue → AC Input Voltage Measurement 
+  Yellow → DC Output Voltage Measurement 
+  Pink → DC Output current Measurement 
+  Figure 11 AC→DC PFC (AC–DC boost) Operation at 1.98KW Power Transfer 
+  Table 8 Expected output for AC→DC PFC (AC–DC boost) test result verification table 
+
+## Conclusion (Page 20)
+  Conclusion 
+  The PFC stage was tested in open-loop and successfully boosted the DC link to 403.63 V, which meets the 400 V target requirement. The measured input current is 10.32 A, and testing for higher current up to the rated 50 A condition is fail. 
+  During this test, the converter delivered 1.978 kW output power with 4.9 A output current, which is below the rated 11 kW and 27.5 A output current. Therefore, the PFC converter operation is verified at this power level, and full rated power validation is failed. 
+
+# OBC/DCDC Switching Frequency and Gate Driver Shutdown Verification (Page 22)
+  OBC/DCDC Switching Frequency and Gate Driver Shutdown Verification 
+
+## Test criteria (Page 22)
+  Test criteria 
+  To verify that the OBC and DCDC circuits switch between 200 kHz and 500 kHz during normal operation, and to verify that if any one gate drive fails or any one gate driver power supply fails, the unit performs a complete shutdown (stops switching and disables outputs) with no continued operation. 
+  Table 9 Expected output OBC/DCDC Switching Frequency and Gate Driver Shutdown Verification 
+
+## Test procedures (Page 22)
+  Test procedures 
+  Step 1: Ultra Small Setup
+• Place the fully assembled Ultra Small unit on an insulated test bench.
+• Ensure the AC source, HV load, CAN tool, and oscilloscope are OFF before wiring.
+• Verify the unit is mechanically secured and properly grounded. 
+  Step 2: Wiring Setup
+• Consider the same AC→DC charging setup:
+– Connector 1 → AC input (L, N, PE) from programmable AC source
+– Connector 5 → HV output (HV+, HV–) to HV load / battery simulator
+– Connector 3 → CAN tool (CAN_H, CAN_L, GND) for enable and fault monitoring
+Measurement setup (oscilloscope):
+• Connect oscilloscope probes to measure switching frequency:
+– OBC stage: probe the OBC PWM/gate test point (gate signal)
+– DCDC stage: probe the DCDC PWM/gate test point (gate signal)
+• Set os 
+  Step 3: Start Normal Operation
+• Set AC source to nominal input voltage and frequency:
+– 110 Vac model: 110 Vac, 50 Hz
+– 220 Vac model: 230 Vac, 50 Hz
+• Turn ON AC source.
+• Enable AC→DC charging via CAN.
+• Apply HV load so the unit is operating in steady state. 
+  Step 4: Measure OBC Switching Frequency
+• Capture the OBC gate/PWM waveform on the oscilloscope.
+• Record measured switching frequency.
+• Confirm frequency is between 200 kHz and 500 kHz.
+• Save oscilloscope screenshot as evidence. 
+  Step 5: Measure DCDC Switching Frequency
+• Capture the DCDC gate/PWM waveform on the oscilloscope.
+• Record measured switching frequency.
+• Confirm frequency is between 200 kHz and 500 kHz.
+• Save oscilloscope screenshot as evidence. 
+  Step 6: Gate Drive Failure Shutdown Test (Single Failure)
+• Keep unit in normal operation under load.
+• Introduce a single gate-drive failure on one channel (one gate drive only).
+• Observe and record:
+– Switching waveforms stop (OBC and DCDC gate signals go inactive)
+– HV output at Connector 5 drops to safe state (no power conversion)
+– CAN reports fault / unit state changes to fault/shutdown
+• Save oscilloscope screenshot showing switching disabled. 
+  Step 7: Gate Driver Power Supply Failure Shutdown Test (Single Failure)
+• Restore unit to normal operation (reset/clear fault as per standard method).
+• Introduce failure of one gate-driver power supply (remove/disable driver supply).
+• Observe and record:
+– Switching waveforms stop (OBC and DCDC gate signals go inactive)
+– HV output at Connector 5 disabled / drops to safe state
+– CAN reports fault / unit enters shutdown
+• Save oscilloscope screenshot showing switching disabled. 
+  Step 8: Power-Down Sequence
+• Disable operation via CAN.
+• Reduce AC input to 0 Vac and turn OFF AC source.
+• Turn OFF HV load/battery simulator.
+• Disconnect oscilloscope and CAN connections. 
+
+## Test results (Page 23)
+  Test results 
+  Will be performed in proto2 
+
+# Dielectric Withstand and Insulation Resistance Verification (Page 25)
+  Dielectric Withstand and Insulation Resistance Verification 
+
+## Test criteria (Page 25)
+  Test criteria 
+  To verify the unit passes isolation and insulation by withstanding 2.5 kVrms between HV+/HV− and LV GND, achieving insulation resistance of ≥20 MΩ (HV to LV GND) and ≥10 MΩ (AC L/N to Body, AC L/N to HV+, AC L/N to HV−), and confirming LV GND is shorted to the Body, with correct insulation distances for basic (2500 V impulse) and reinforced (4000 V impulse) insulation. 
+  Table 10 Expected output dielectric withstand and insulation resistance verification 
+
+## Test procedures (Page 25)
+  Test procedures 
+  Step 1: Safety Setup
+• Place the unit on an insulated bench and ensure the area is clear.
+• Ensure the unit is powered OFF, AC source disconnected, and HV is fully discharged.
+• Confirm no cables are connected to Connector 1, Connector 3, Connector 4, or Connector 5 except the test instrument leads. 
+  Step 2: Equipment Setup
+• Use a Hi-Pot tester for dielectric withstands (kVrms).
+• Use an Insulation Resistance tester (Megger) for MΩ measurements.
+• Use a DMM for LV GND-to-body short (Ω). 
+  A) Dielectric Withstand Test (Hi-Pot) HV to LV GND (2.5 kVrms) 
+  Step 3: Connect Hi-Pot Leads
+• Connect Hi-Pot HIGH lead to Connector 5 (HV+) and Connector 5 (HV−) tied together.
+• Connect Hi-Pot RETURN led to LV GND on Connector 3. 
+  Step 4: Apply Withstand Voltage
+• Set Hi-Pot to 2.5 kVrms.
+• Set ramp time and dwell time as per your lab standard (example: ramp 5 s, dwell 60 s).
+• Start the Hi-Pot test. 
+  Step 5: Record Result
+• Record applied voltage, leakage current, and pass/fail outcome.
+• Stop the tester and discharge the DUT using the tester discharge function. 
+  B) Insulation Resistance Tests (Megger) 
+  Step 6: HV to LV GND (≥ 20 MΩ)
+• Connect Megger HIGH lead to Connector 5 (HV+) and HV− tied together.
+• Connect Megger LOW/RETURN lead to LV GND at Connector 3.
+• Apply the insulation test voltage as per your standard (example: 500 Vdc or 1000 Vdc).
+• Measure and record insulation resistance; must be ≥ 20 MΩ. 
+  Step 7: AC L/N to Body (≥ 10 MΩ)
+• Tie Connector 1 (L and N) together.
+• Connect Megger HIGH lead to tied L+N at Connector 1.
+• Connect Megger LOW/RETURN lead to Body/Chassis.
+• Measure and record insulation resistance; must be ≥ 10 MΩ. 
+  Step 8: AC L/N to HV+ (≥ 10 MΩ)
+• Tie Connector 1 (L and N) together.
+• Connect Megger HIGH lead to tied L+N at Connector 1.
+• Connect Megger LOW/RETURN lead to Connector 5 (HV+).
+• Measure and record insulation resistance; must be ≥ 10 MΩ. 
+  Step 9: AC L/N to HV− (≥ 10 MΩ)
+• Tie Connector 1 (L and N) together.
+• Connect Megger HIGH lead to tied L+N at Connector 1.
+• Connect Megger LOW/RETURN lead to Connector 5 (HV−).
+• Measure and record insulation resistance; must be ≥ 10 MΩ. 
+  C) LV Ground to Body Bond (Conductive Short) 
+  Step 10: Bonding Check (Near 0 Ω)
+• Using a DMM in resistance mode:
+• Connect one probe to LV GND at Connector 3.
+• Connect the other probe to Body/Chassis.
+• Record resistance; it must indicate short/conductive bond (near 0 Ω). 
+  D) Insulation Distance Verification (Visual/Measurement) 
+  Step 11: Basic and Reinforced Distance Check
+• Using calibrated calipers/creepage gauge, measure:
+– Basic insulation spacing locations (target rated impulse 2500 V)
+– Reinforced insulation spacing locations (target rated impulse 4000 V)
+• Record measured clearance/creepage values for the defined PCB and mechanical barriers. 
+  Step 12: Power-Down / Disconnect
+• Ensure the DUT is discharged.
+• Remove all test leads from Connector 1, Connector 3, and Connector 5.
+• Attach all screenshots/printouts from Hi-Pot and Megger results to the report. 
+
+## Test results (Page 27)
+  Test results 
+  Will be performed in proto2 
+
+# AC and HV Self-Discharge Verification (Power-Off Voltage Decay) (Page 27)
+  AC and HV Self-Discharge Verification (Power-Off Voltage Decay) 
+
+## Test criteria (Page 28)
+  Test criteria 
+  To verify safe self-discharge on power removal: AC L/N drops from 373 Vac to ≤40 Vac in 1 s, HV+/HV− drops from 840 Vdc to ≤60 Vdc in 1 s when control supply is ON, and HV+/HV− drops from 840 Vdc to ≤60 Vdc in 5 min when control supply is OFF. 
+  Table 11 Expected output AC and HV Self-Discharge Verification (Power-Off Voltage Decay) 
+
+## Test procedures (Page 28)
+  Test procedures 
+  Step 1: Ultra Small Setup
+• Place the fully assembled Ultra Small unit on an insulated test bench.
+• Ensure the AC source, HV load/battery simulator, control supply, and oscilloscope/DMM are OFF before wiring.
+• Verify the unit is mechanically secured and properly grounded. 
+  Step 2: Wiring Setup
+• Connector 1 → AC input (L, N, PE) from programmable AC source.
+• Connector 5 → HV output (HV+, HV–) connected to HV load / battery simulator to reach 840 Vdc operating condition.
+• Control supply connection → connect the unit control supply so it can be kept ON or turned OFF independently (as required by the test step).
+Measurement setup:
+• Connect oscilloscope (or DMM with logging) across:
+– AC L–N at Connector 1 (for AC discharge test)
+– HV+–HV− at Connector 5 (for HV di 
+  A) AC L/N Self-Discharge Test (373 Vac → ≤40 Vac in 1 sec) 
+  Step 3: Bring AC Input to 373 Vac
+• Set AC source to 373 Vac at nominal frequency and turn ON.
+• Keep the unit in the operating state required for this condition.
+• Confirm AC L–N at Connector 1 is ~373 Vac. 
+  Step 4: Capture Power-Off Decay
+• Arm oscilloscope trigger for a falling edge at AC input.
+• Turn OFF the AC source output (power OFF event).
+• Measure the time taken for AC L–N (Connector 1) to drop from 373 Vac to ≤40 Vac. 
+  Step 5: Record Result
+• Save the decay waveform and record decay time (must be ≤1 sec). 
+  B) HV Self-Discharge Test — Control Supply ON (840 Vdc → ≤60 Vdc in 1 sec) 
+  Step 6: Bring HV Output to 840 Vdc
+• Turn ON AC source at nominal input.
+• Enable operation so the HV bus reaches 840 Vdc at Connector 5.
+• Keep control supply ON.
+• Confirm HV+–HV− at Connector 5 is ~840 Vdc. 
+  Step 7: Capture HV Power-Off Decay (Control ON)
+• Arm oscilloscope trigger for a falling edge on HV voltage.
+• Turn OFF HV power (stop HV generation / disable HV output) while keeping control supply ON.
+• Measure the time taken for HV (Connector 5) to drop from 840 Vdc to ≤60 Vdc. 
+  Step 8: Record Result
+• Save the decay waveform and record decay time (must be ≤1 sec). 
+  C) HV Self-Discharge Test — Control Supply OFF (840 Vdc → ≤60 Vdc in 5 min) 
+  Step 9: Bring HV Output to 840 Vdc
+• Restore operation and again bring HV to 840 Vdc at Connector 5.
+• Confirm stable HV voltage. 
+  Step 10: Power-Off with Control Supply OFF
+• Turn OFF HV power (disable HV output / stop conversion).
+• Immediately turn control supply OFF.
+• Start timer at the moment HV power is turned OFF. 
+  Step 11: Measure Long Discharge
+• Monitor HV+–HV− at Connector 5 until it reaches ≤60 Vdc.
+• Record the time required (must be ≤5 minutes). 
+  Step 12: Power-Down Sequence
+• Ensure AC input is OFF and HV is fully discharged.
+• Turn OFF all supplies.
+• Disconnect measurement equipment. 
+
+## Test results (Page 29)
+  Test results 
+  Will be performed in proto2 
+
+# AC Input Overvoltage/Undervoltage Protection and Auto-Recovery Verification (Page 31)
+  AC Input Overvoltage/Undervoltage Protection and Auto-Recovery Verification 
+
+## Test criteria (Page 31)
+  Test criteria 
+  To verify that if AC input at Connector 1 goes too high (overvoltage) or too low (undervoltage), the unit stops the output, and when the AC input returns to the normal operating range, the unit automatically resets and starts again. [SIZE MISMATCH: 12.0pt vs default 11.0pt]
+  Table 12 Expected output AC Input Overvoltage/Undervoltage Protection and Auto-Recovery Verification 
+
+## Test procedures (Page 31)
+  Test procedures 
+  Step 1: Ultra Small Setup
+• Place the unit on an insulated test bench.
+• Ensure the AC source, HV load/battery simulator, CAN tool, and meters are OFF before wiring.
+• Verify the unit is secured and properly grounded. 
+  Step 2: Wiring Setup
+• Connector 1 → Programmable AC source (L, N, PE).
+• Connector 5 → HV load / battery simulator (HV+, HV–).
+• Connector 3 → CAN tool (CAN_H, CAN_L, GND) to enable operation and monitor faults/state.
+Measurement setup:
+• Monitor AC input voltage at Connector 1 (AC source display or meter).
+• Monitor HV output voltage at Connector 5 (DMM/oscilloscope).
+• Monitor unit state and fault flags via CAN. 
+  Step 3: Start Normal Operation
+• Set AC source to nominal input
+– 110 Vac model: 110 Vac
+– 220 Vac model: 230 Vac
+• Enable AC source output.
+• Enable AC→DC operation via CAN.
+• Apply HV load so the unit is charging in steady state.
+• Record baseline: Vin (Connector 1), Vout (Connector 5), CAN state = Running/Charging. 
+  A) AC Input Overvoltage Protection + Auto-Recovery 
+  Step 4: Create AC Overvoltage Condition
+• Increase AC input at Connector 1 above the overvoltage threshold for the model.
+• Observe that the unit stops output:
+– HV output at Connector 5 drops/turns OFF to safe state
+– CAN state changes to fault/protection 
+  Step 5: Verify Auto-Recovery
+• Reduce AC input back into the normal operating range for the model.
+• Confirm the unit automatically resets and resumes operation:
+– CAN state returns to Running/Charging
+– HV output at Connector 5 returns to normal regulation
+• Record recovery time (optional). 
+  B) AC Input Undervoltage Protection + Auto-Recovery 
+  Step 6: Create AC Undervoltage Condition
+• Decrease AC input at Connector 1 below the undervoltage threshold for the model.
+• Observe that the unit stops output:
+– HV output at Connector 5 drops/turns OFF to safe state
+– CAN state changes to fault/protection 
+  Step 7: Verify Auto-Recovery
+• Increase AC input back into the normal operating range for the model.
+• Confirm the unit automatically resets and resumes operation:
+– CAN state returns to Running/Charging
+– HV output at Connector 5 returns to normal regulation
+• Record recovery time (optional). 
+  Step 8: Power-Down Sequence
+• Disable operation via CAN.
+• Reduce AC input to 0 Vac and turn OFF AC source.
+• Turn OFF HV load/battery simulator.
+• Disconnect all equipment. 
+
+## Test results (Page 32)
+  Test results 
+  Will be performed in proto2 
+
+# HV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification (Page 34)
+  HV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification 
+
+## Test criteria (Page 34)
+  Test criteria 
+  To verify that during AC→DC charging, when the HV battery voltage at Connector 5 is forced above the overvoltage limit or below the undervoltage limit, the unit stops charging and disables the output (HV output goes to a safe state) with a protection status, and then automatically recovers and resumes charging when the HV battery voltage returns to the required operating range, without manual reset or power cycling. 
+  Table 13 Expected output HV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification 
+
+## Test procedures (Page 34)
+  Test procedures 
+  Step 1: Ultra Small Setup
+• Place the unit on an insulated test bench and ensure it is properly grounded.
+• Ensure the AC source, HV battery simulator, and CAN tool are OFF before wiring. 
+  Step 2: Wiring Setup
+• Connector 1 → Connect programmable AC source (L, N, PE).
+• Connector 5 → Connect HV battery simulator (HV+, HV–).
+• Connector 3 → Connect CAN tool (CAN_H, CAN_L, GND) to enable charging and monitor faults/state.
+Measurement setup:
+• Monitor HV battery voltage at Connector 5 (battery simulator display or DMM).
+• Monitor charging/output state via CAN. 
+  Step 3: Start Normal Charging Operation
+• Set AC source to nominal input and turn ON:
+– 110 Vac model: 110 Vac
+– 220 Vac model: 230 Vac
+• Set HV battery simulator to a normal operating voltage within range (example: mid-range).
+• Enable AC→DC charging via CAN.
+• Confirm charging is running and no faults are present. 
+  A) HV Battery Overvoltage Protection + Auto-Recovery 
+  Step 4: Create HV Overvoltage Condition
+• Increase HV battery simulator voltage at Connector 5 above the HV overvoltage limit.
+• Observe and record:
+– Charging stops / output disabled
+– CAN state changes to protection/fault 
+  Step 5: Verify Auto-Recovery from HV Overvoltage
+• Reduce HV battery simulator voltage back into the normal operating range.
+• Confirm and record:
+– Unit automatically resets and resumes charging
+– CAN state returns to Charging/Running with no active fault 
+  B) HV Battery Undervoltage Protection + Auto-Recovery 
+  Step 6: Create HV Undervoltage Condition
+• Decrease HV battery simulator voltage at Connector 5 below the HV undervoltage limit.
+• Observe and record:
+– Charging stops / output disabled
+– CAN state changes to protection/fault 
+  Step 7: Verify Auto-Recovery from HV Undervoltage
+• Increase HV battery simulator voltage back into the normal operating range.
+• Confirm and record:
+– Unit automatically resets and resumes charging
+– CAN state returns to Charging/Running with no active fault 
+  Step 8: Power-Down Sequence
+• Disable AC→DC charging via CAN.
+• Turn OFF AC source and HV battery simulator.
+• Disconnect all equipment. 
+
+## Test results (Page 35)
+  Test results 
+  Will be performed in proto2 
+
+# LV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification (Page 37)
+  LV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification 
+
+## Test criteria (Page 37)
+  Test criteria 
+  To verify that when the LVDC battery voltage is forced above the overvoltage limit or below the undervoltage limit, the unit stops the output (LVDC output is disabled / goes to a safe state) and then automatically recovers and resumes normal operation when the LVDC battery voltage returns to the required operating range, without manual reset or power cycling. 
+  Table 14 Expected output LV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification 
+
+## Test procedures (Page 37)
+  Test procedures 
+  Step 1: Ultra Small Setup
+• Place the unit on an insulated test bench and ensure it is properly grounded.
+• Ensure the AC source, LV battery simulator/power supply, and CAN tool are OFF before wiring. 
+  Step 2: Wiring Setup
+• Connector 1 → Connect programmable AC source (L, N, PE) to power the unit.
+• Connector 4 → Connect LV battery simulator / LV DC supply (LV+, LV–).
+• Connector 3 → Connect CAN tool (CAN_H, CAN_L, GND) to enable operation and monitor faults/state.
+Measurement setup:
+• Monitor LV battery voltage at Connector 4 (supply display or DMM).
+• Monitor unit state and fault flags via CAN. 
+  Step 3: Start Normal Operation
+• Set AC source to nominal input (110 Vac model: 110 Vac / 220 Vac model: 230 Vac) and turn ON.
+• Set LV battery simulator to a normal operating LV voltage (within range).
+• Enable operation via CAN and confirm unit is running with no faults. 
+  A) LV Battery Overvoltage Protection + Auto-Recovery 
+  Step 4: Create LV Overvoltage Condition
+• Increase LV battery simulator voltage at Connector 4 above the LV overvoltage limit.
+• Observe and record:
+– Output stops / LV output disabled
+– CAN state changes to protection/fault 
+  Step 5: Verify Auto-Recovery from LV Overvoltage
+• Reduce LV battery simulator voltage back into the normal operating range.
+• Confirm and record:
+– Unit automatically resets and resumes operation
+– CAN state returns to Running with no active fault 
+  B) LV Battery Undervoltage Protection + Auto-Recovery 
+  Step 6: Create LV Undervoltage Condition
+• Decrease LV battery simulator voltage at Connector 4 below the LV undervoltage limit.
+• Observe and record:
+– Output stops / LV output disabled
+– CAN state changes to protection/fault 
+  Step 7: Verify Auto-Recovery from LV Undervoltage
+• Increase LV battery simulator voltage back into the normal operating range.
+• Confirm and record:
+– Unit automatically resets and resumes operation
+– CAN state returns to Running with no active fault 
+  Step 8: Power-Down Sequence
+• Disable operation via CAN.
+• Turn OFF AC source and LV battery simulator.
+• Disconnect all equipment. 
+
+## Test results (Page 38)
+  Test results 
+  Will be performed in proto2 
+
+# LV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification (Page 40)
+  LV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification 
+
+## Test criteria (Page 40)
+  Test criteria 
+  To verify overcurrent protection latching behaviour by confirming that when an HVDC output overcurrent or an LVDC output overcurrent is applied, the unit stops the output immediately and does not automatically restart even after the overcurrent condition is removed (for example, the load is disconnected), and that output operation is restored only after a full reboot (Power OFF and ON). 
+  Table 15 Expected output LV Battery Overvoltage/Undervoltage Protection and Auto-Recovery Verification 
+
+## Test procedures (Page 40)
+  Test procedures 
+  Step 1: Ultra Small Setup
+• Place the unit on an insulated test bench and ensure it is properly grounded.
+• Ensure AC source, HV load, LV load, and CAN tool are OFF before wiring. 
+  Step 2: Wiring Setup
+• Connector 1 → Connect programmable AC source (L, N, PE).
+• Connector 5 → Connect HV electronic load / HV battery simulator (HV+, HV–) for HVDC overcurrent test.
+• Connector 4 → Connect LV electronic load (LV+, LV–) for LVDC overcurrent test.
+• Connector 3 → Connect CAN tool (CAN_H, CAN_L, GND) to enable operation and monitor state/faults.
+Measurement setup:
+• Monitor HV output current/voltage at Connector 5 (load display or meter).
+• Monitor LV output current/voltage at Co 
+  Step 3: Start Normal Operation
+• Set AC source to nominal input (110 Vac model: 110 Vac / 220 Vac model: 230 Vac) and turn ON.
+• Enable operation via CAN.
+• Confirm unit is running normally with no faults. 
+  A) HVDC Output Overcurrent Latch Test (No Auto Reset) 
+  Step 4: Apply HV Load in Normal Range
+• Set HV load to a normal current below OCP limit and confirm stable operation. 
+  Step 5: Create HV Overcurrent Condition
+• Increase HV load current demand to exceed the HVDC overcurrent limit.
+• Observe and record:
+– HV output stops / HV current drops
+– Unit enters overcurrent protection state (via CAN) 
+  Step 6: Remove Overcurrent (Without Power Cycle)
+• Reduce HV load current back to normal or disconnect HV load.
+• Keep unit powered ON (do not power cycle).
+• Confirm and record:
+– HV output does not restart automatically
+– Unit remains latched in fault/protection state 
+  Step 7: Reboot Recovery Check
+• Turn OFF AC source (Power OFF).
+• Wait until unit is fully OFF.
+• Turn ON AC source (Power ON).
+• Enable operation via CAN.
+• Confirm and record HV output operation is restored. 
+  B) LVDC Output Overcurrent Latch Test (No Auto Reset) 
+  Step 8: Apply LV Load in Normal Range
+• Set LV load to a normal current below OCP limit and confirm stable operation. 
+  Step 9: Create LV Overcurrent Condition
+• Increase LV load current demand to exceed the LVDC overcurrent limit.
+• Observe and record:
+– LV output stops / LV current drops
+– Unit enters overcurrent protection state (via CAN) 
+  Step 10: Remove Overcurrent (Without Power Cycle)
+• Reduce LV load current back to normal or disconnect LV load.
+• Keep unit powered ON (do not power cycle).
+• Confirm and record:
+– LV output does not restart automatically
+– Unit remains latched in fault/protection state 
+  Step 11: Reboot Recovery Check
+• Turn OFF AC source (Power OFF).
+• Wait until unit is fully OFF.
+• Turn ON AC source (Power ON).
+• Enable operation via CAN.
+• Confirm and record LV output operation is restored. 
+  Step 12: Power-Down Sequence
+• Disable operation via CAN.
+• Turn OFF AC source.
+• Turn OFF HV and LV loads.
+• Disconnect all equipment. 
+
+## Test results (Page 42)
+  Test results 
+  Will be performed in proto2 
+
+# Thermal Derating Verification for OBC, PFC, and DCDC Hotspots (Page 44)
+  Thermal Derating Verification for OBC, PFC, and DCDC Hotspots 
+
+## Test criteria (Page 44)
+  Test criteria 
+  To verify thermal derating protection by confirming that when any monitored hotspot temperature rises above its overtemperature threshold—OBC transformer, DCDC transformer, OBC PFC power devices area, OBC DAB primary power devices area, OBC DAB secondary power devices area, DCDC DAB primary power devices area, DCDC DAB secondary power devices area, or DCDC output connector—the unit automatically reduces (derates) output current enough to cause the temperature to drop below the threshold and rema 
+  Table 16 Expected output Thermal Derating Verification for OBC, PFC, and DCDC Hotspots 
+
+## Test procedures (Page 44)
+  Test procedures 
+  Step 1: Ultra Small Setup
+• Place the unit on an insulated test bench and ensure it is properly grounded.
+• Ensure the AC source, HV load/battery simulator, LV load/battery, CAN tool, and temperature instruments are OFF before wiring. 
+  Step 2: Wiring Setup (as per block diagram)
+• Connector 1 → Programmable AC source (L, N, PE).
+• Connector 5 → HV output (HV+, HV–) to HV load / battery simulator (for AC→DC operation).
+• Connector 4 → LV output / LV battery connection (LV+, LV–) for DCDC operation if applicable in this test.
+• Connector 3 → CAN tool (CAN_H, CAN_L, GND) to monitor status and derating. 
+  Step 3: Temperature Measurement Setup
+• Attach temperature sensors (thermocouple/RTD) or use IR camera on each hotspot: 
+  OBC Transformer 
+  DCDC Transformer 
+  OBC PFC power device area 
+  OBC DAB primary device area 
+  OBC DAB secondary device area 
+  DCDC DAB primary device area 
+  DCDC DAB secondary device area 
+  DCDC output connector
+• Configure data logging for temperature vs time.
+• Configure logging for output current (HV current at Connector 5 and LV current at Connector 4) using load readings or CAN. 
+  Step 4: Start Normal Operation (Baseline)
+• Turn ON AC source to nominal input and enable operation.
+• Apply load so the unit runs at steady power (example: 100% rated power).
+• Record baseline values for 2 minutes:
+– Hotspot temperatures
+– Output current
+– CAN status (no faults) 
+  A) Derating Verification (Repeat for each hotspot one-by-one) 
+  Step 5: Select Hotspot Under Test
+• Choose one hotspot from the list (1 to 8) and keep all others monitored. 
+  Step 6: Induce Overheating at Selected Hotspot
+• Increase load or apply controlled external heating to raise the selected hotspot temperature above its derating threshold.
+• Continuously monitor temperature rise and output current. 
+  Step 7: Verify Derating Action
+• When the hotspot crosses the threshold, observe that the unit automatically reduces output current.
+• Record:
+– Temperature at which derating starts
+– Output current before derating and after derating
+– Time taken for temperature to fall below threshold
+– CAN state / derating indication (if available) 
+  Step 8: Verify Temperature Recovery
+• Keep the system running and confirm output current remains reduced until the hotspot temperature drops below threshold and stabilizes. 
+  Step 9: Verify Return from Derating
+• Reduce heating (or reduce load) so the hotspot temperature stays safely below threshold.
+• Confirm the unit increases output current back toward normal operating level (as per control behaviour).
+• Record temperature and output current during recovery. 
+  Step 10: Reset for Next Hotspot
+• Return unit to baseline operating condition and allow temperatures to stabilize.
+• Repeat Steps 5–9 for the next hotspot until all 8 hotspots are tested. 
+  Step 11: Power-Down Sequence
+• Disable operation via CAN.
+• Turn OFF AC source.
+• Turn OFF HV/LV loads.
+• Remove temperature sensors and disconnect all equipment. 
+
+## Test results (Page 45)
+  Test results 
+  Will be performed in proto2 
+
+# Power-On Dead Short Detection and Latch Shutdown Verification (Page 46)
+  Power-On Dead Short Detection and Latch Shutdown Verification 
+
+## Test criteria (Page 46)
+  Test criteria 
+  To verify dead-short protection at power-on by confirming that the unit checks for a dead short on AC input at Connector 1 (L/N) and HV output at Connector 5 (HV+/HV−) during start-up, and if a dead short is present the unit does not start and stops all outputs. Also verify that after the short is removed, the unit does not automatically reset or restart, and operation is restored only after a full reboot (Power OFF → ON). 
+  Table 17 Expected output Power-On Dead Short Detection and Latch Shutdown Verification 
+
+## Test procedures (Page 46)
+  Test procedures 
+  Step 1: Safety Setup
+• Place the unit on an insulated bench and ensure proper grounding.
+• Keep AC source OFF and HV load disconnected initially.
+• Use insulated tools and a controlled shorting link rated for the test. 
+  Step 2: Wiring Setup (as per block diagram)
+• Connector 1 → Programmable AC source (L, N, PE).
+• Connector 5 → HV output terminals accessible for short test (HV+, HV–).
+• Connector 3 → CAN tool (CAN_H, CAN_L, GND) to monitor status/faults.
+Measurement setup:
+• DMM/oscilloscope at Connector 5 to monitor HV output voltage.
+• Monitor unit fault/state through CAN. 
+  A) AC Input Dead Short Detection at Power ON (Connector 1) 
+  Step 3: Apply Dead Short on AC Input
+• With all power OFF, connect a solid short between Connector 1 L and N (dead short). 
+  Step 4: Power ON Attempt
+• Turn ON the AC source to nominal voltage.
+• Command unit to start (via CAN if required). 
+  Step 5: Verify Protection Action
+• Confirm the unit does not start and all outputs remain stopped:
+– HV output at Connector 5 stays OFF / near 0 V
+– CAN shows dead short / fault / shutdown state 
+  Step 6: Remove Short Without Reboot
+• Remove the L–N short while keeping AC power ON.
+• Confirm the unit does not automatically restart and remains latched OFF. 
+  Step 7: Reboot Recovery
+• Turn OFF AC source (Power OFF).
+• Remove any remaining short links.
+• Turn ON AC source again (Power ON).
+• Start the unit and confirm normal operation is possible. 
+  B) HV Output Dead Short Detection at Power ON (Connector 5) 
+  Step 8: Apply Dead Short on HV Output
+• Turn OFF AC source and ensure unit is fully discharged.
+• Connect a solid short between Connector 5 HV+ and HV− (dead short). 
+  Step 9: Power ON Attempt
+• Turn ON the AC source to nominal voltage.
+• Command unit to start (via CAN if required). 
+  Step 10: Verify Protection Action
+• Confirm the unit does not start and all outputs remain stopped:
+– HV output at Connector 5 stays OFF / near 0 V
+– CAN shows dead short / fault / shutdown state 
+  Step 11: Remove Short Without Reboot
+• Remove the HV+–HV− short while keeping AC power ON.
+• Confirm the unit does not automatically restart and remains latched OFF. 
+  Step 12: Reboot Recovery
+• Turn OFF AC source (Power OFF).
+• Turn ON AC source again (Power ON).
+• Start the unit and confirm normal operation is possible. 
+  Step 13: Power-Down Sequence
+• Turn OFF AC source.
+• Disconnect CAN tool and measurement probes.
+• Ensure all shorting links are removed and unit is safe. 
+
+## Test results (Page 47)
+  Test results 
+  Will be performed in proto2 
+
+# SRS test mapping (Page 49)
+  SRS test mapping 
+
+## (Document Headers & Footers) (Page 1)
+  TICO Ultra Small 
+  TICO Ultrasmall – Lab test report 
+  2 
+
+## TABLES IN DOCUMENT
+
+### Table 1 (2×3)
+  Row 0: S. No | Description | Completion Date
+  Row 1: 1 | Test to be performed in proto 2 for Test 5 to test 13 | 13-MAR-2026
+
+### Table 2 (3×4)
+  Row 0: S. No | Description | Referred file name with version | Date
+  Row 1: 1 | ULTRA SMALL  SRS | Ultrasmall_SRS_V01_18Apr25 | 18-APR-2025
+  Row 2: 2 | Hardware/Software Interface Specification (HSIS) | TICO-ULTRASMALL-PH3-CONCEPT_HSIS_27_02_26 | 27-FEB-2026
+
+### Table 3 (2×6)
+  Row 0: Version No. | Date | Change Description | Prepared By | Reviewed By | Approved By
+  Row 1: 0.1 | 19-Jan-2026 | Initial creation | Obulisuresh | Sarup | Jaywant
+
+### Table 4 (15×3)
+  Row 0: Sr.# | Equipment / Supply | Part-Number/ Model No/Order Number
+  Row 1: 1 | Programmable DC Power Supply (1000V / 32A) | SP1000VDC12000W
+  Row 2: 2 | Coolant Pump | -
+  Row 3: 3 | Variable DC Power Supply (400V) | SKU01830
+  Row 4: 4 | Resistive DC Load Bank (11 kW) | SBTSRLB DC252660-1
+  Row 5: 5 | Resistive DC Load Bank (3.3 kW) | SBTSRLVDC252660-2
+  Row 6: 6 | Radiator (With Fan Assembly) | -
+  Row 7: 7 | Auto Transformer | VCS 0825126
+  Row 8: 8 | Oscilloscope | RIGOL-DHO914
+  Row 9: 9 | 30V Power Supply (Programmable) | RIGOL-DP932E
+  Row 10: 10 | 60V Regulated Power Supply | RADIAL-RL06005
+  Row 11: 11 | Solder Station | SOLDERON-878D
+  Row 12: 12 | Test Bench Tables | -
+  Row 13: 13 | DUT Table | -
+  Row 14: 14 | MEGER Insulation Resistance Tester (DC 1000 V) | UT502A
+
+### Table 5 (5×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Input DC Voltage | 400 V | 400 V ± 2% (392–408 V)
+  Row 2: Output Voltage (Target) | 800 V | 800 V ± 2% (784–816 V)
+  Row 3: Input Current Avg (Case-1) | 27.5 A | ≥ 27.5 A (to meet 11 kW at 400 V)
+  Row 4: Output Current Avg (Case-1) | 13.75 A | ≥ 13.75 A (to meet 11 kW at 800 V)
+
+### Table 6 (5×5)
+  Row 0: Parameter | Expected | Measured | Pass Criteria | Judgement
+  Row 1: Input DC Voltage | 400V | 400V | 400V ± 2% (392–408V) | PASS
+  Row 2: Output Voltage | 800V | 798V | 800V± 2%  (784–816V) | PASS
+  Row 3: Input Current Avg (Case-1) | 27.5A | 4.90A | ≥ 27.5A | Fail
+  Row 4: Output Current Avg (Case-1) | 13.75A | 10.2A | ≥ 13.75A | Fail
+
+### Table 7 (5×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Input DC Voltage | 800 V | 800 V ± 2% (784–816 V)
+  Row 2: Output Voltage (Target) | 13 V | 13 V ± 0.5 V (12.5–13.5 V)
+  Row 3: Input Current Avg (Rated) | 4.37 A | ≥ 4.37 A (to meet 3.3 kW at 800 V)
+  Row 4: Output Current Avg (Rated) | 275 A | ≥ 275 A (to meet 3.3 kW at 13 V)
+
+### Table 8 (7×5)
+  Row 0: Parameter | Expected | Measured | Pass Criteria | Judgement
+  Row 1: Input DC Voltage | 560 V | 560 V | 560 V ± 2% (548–571 V) | PASS
+  Row 2: Output DC Voltage | 13 V | 13 V | 13 V ± 0.5 V | PASS
+  Row 3: Input Current | 4.37 A (rated) | 3.8 A | ≥ 4.37 A (to meet 3.3 Kw at 800 V) | Fail
+  Row 4: Output Current | 275 A (rated) | 147.4 A | ≥ 275 A (to meet 3.3 Kw at 13 V) | Fail
+  Row 5: Output Power | 3.3 Kw | 1.92 Kw | ≥ 3.3 Kw | Fail
+  Row 6: Efficiency | ≥ 90 % | 90.10% | ≥ 90 % | PASS
+
+### Table 9 (5×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Input AC Voltage | 230 V | 230 V ± 10% (207–253 V)
+  Row 2: Output DC Voltage (Target) | 400 V | 400 V ± 2% (392–408 V)
+  Row 3: Input Current Avg (Rated) | 50 A | ≤ 50 A (input current limit at rated load)
+  Row 4: Output Current Avg (Rated) | 27.5 A | ≥ 27.5 A (to meet 11 kW at 400 V)
+
+### Table 10 (6×5)
+  Row 0: Parameter | Expected | Measured | Pass Criteria | Judgement
+  Row 1: Input AC Voltage | 230 V | 203.3 V | 230 V ± 10% (207–253 V) | Fail
+  Row 2: Output DC Voltage | 400 V | 403.63 V | 400 V ± 2% (392–408 V) | PASS
+  Row 3: Input Current | 50 A | 10.32 A | 50 A (input current limit) | Fail
+  Row 4: Output Current | 27.5 A | 4.9 A | ≥ 27.5 A (to meet 11 kW at 400 V) | Fail
+  Row 5: Output Power | 11 kW | 1.978 kW | ≥ 11 kW | Fail
+
+### Table 11 (6×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Mode | Normal operation (AC→DC charging enabled) | Unit operates normally for measurement
+  Row 2: OBC switching frequency | Measure on OBC PWM/gate signal (oscilloscope) | 200 kHz to 500 kHz
+  Row 3: DCDC switching frequency | Measure on DCDC PWM/gate signal (oscilloscope) | 200 kHz to 500 kHz
+  Row 4: Gate drive failure (single channel) | Create failure on any one gate drive | Unit performs complete shutdown (switching stops, outputs di
+  Row 5: Gate driver power supply failure (single) | Remove/disable any one gate driver supply | Unit performs complete shutdown (switching stops, outputs di
+
+### Table 12 (9×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Dielectric Withstand (Hi-Pot) | HV+/HV− ↔ LV GND | ≥ 2.5 kVrms (no breakdown/flashover)
+  Row 2: Insulation Resistance | HV+/HV− ↔ LV GND | ≥ 20 MΩ
+  Row 3: Insulation Resistance | AC L/N ↔ Body | ≥ 10 MΩ
+  Row 4: Insulation Resistance | AC L/N ↔ HV+ | ≥ 10 MΩ
+  Row 5: Insulation Resistance | AC L/N ↔ HV− | ≥ 10 MΩ
+  Row 6: LV Ground to Body Bond | LV GND ↔ Body | Short / Conductive bond (near 0 Ω)
+  Row 7: Insulation Distance (Basic) | Basic insulation points | Meets 2500 V impulse requirement
+  Row 8: Insulation Distance (Reinforced) | Reinforced insulation points | Meets 4000 V impulse requirement
+
+### Table 13 (4×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: AC Self-Discharge (Power OFF) | Measure AC L/N at Connector 1, start from 373 Vac | Drops to ≤ 40 Vac within 1 second
+  Row 2: HV Self-Discharge (HV Power OFF, Control Supply ON) | Measure HV+/HV− at Connector 5, start from 840 Vdc | Drops to ≤ 60 Vdc within 1 second
+  Row 3: HV Self-Discharge (HV Power OFF, Control Supply OFF) | Measure HV+/HV− at Connector 5, start from 840 Vdc | Drops to ≤ 60 Vdc within 5 minutes
+
+### Table 14 (6×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Mode | AC→DC operation enabled | Unit running normally before fault
+  Row 2: AC Overvoltage Condition | Set AC input at Connector 1 above OV threshold | Output stops; unit enters protection; auto-restarts when Vin
+  Row 3: AC Undervoltage Condition | Set AC input at Connector 1 below UV threshold | Output stops; unit enters protection; auto-restarts when Vin
+  Row 4: Output Behaviour | Monitor HV output at Connector 5 | HV output disabled / drops to safe state during OV/UV
+  Row 5: Recovery Condition | Return AC input to normal operating range | Unit automatically resets and resumes operation without manu
+
+### Table 15 (6×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Mode | AC→DC charging enabled | Unit runs normally before HV OV/UV test
+  Row 2: HV Battery Overvoltage | Set HV at Connector 5 above HV OV limit | Output stops; charging disabled; auto-restarts when HV retur
+  Row 3: HV Return (after OV) | Set HV at Connector 5 back to normal range | Unit automatically resets and resumes charging
+  Row 4: HV Battery Undervoltage | Set HV at Connector 5 below HV UV limit | Output stops; charging disabled; auto-restarts when HV retur
+  Row 5: HV Return (after UV) | Set HV at Connector 5 back to normal range | Unit automatically resets and resumes charging
+
+### Table 16 (6×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Mode | Normal operation enabled | Unit runs normally before LV OV/UV test
+  Row 2: LV Battery Overvoltage | Set LV battery voltage above LV OV limit | Output stops; LV output disabled; auto-restarts when LV retu
+  Row 3: LV Return (after OV) | Set LV battery voltage back to normal range | Unit automatically resets and resumes operation
+  Row 4: LV Battery Undervoltage | Set LV battery voltage below LV UV limit | Output stops; LV output disabled; auto-restarts when LV retu
+  Row 5: LV Return (after UV) | Set LV battery voltage back to normal range | Unit automatically resets and resumes operation
+
+### Table 17 (8×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Mode | Normal operation enabled | Unit running before overcurrent test
+  Row 2: HVDC Output Overcurrent | Apply HV output current > HV OCP limit (Connector 5 load) | Output stops and latches OFF; no auto-restart after removing
+  Row 3: HVDC Recovery Method | Remove overload (disconnect/reduce load), keep power ON | Output does not restart
+  Row 4: HVDC Reset Method | Power OFF → Power ON (reboot) | Output operation restored
+  Row 5: LVDC Output Overcurrent | Apply LV output current > LV OCP limit (Connector 4 load) | Output stops and latches OFF; no auto-restart after removing
+  Row 6: LVDC Recovery Method | Remove overload (disconnect/reduce load), keep power ON | Output does not restart
+  Row 7: LVDC Reset Method | Power OFF → Power ON (reboot) | Output operation restored
+
+### Table 18 (10×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Mode | Normal operation under load | Unit running steady before heating
+  Row 2: OBC Transformer Overheating | Raise OBC transformer temp above threshold | Output current derates until temperature drops below thresho
+  Row 3: DCDC Transformer Overheating | Raise DCDC transformer temp above threshold | Output current derates until temperature drops below thresho
+  Row 4: OBC PFC Power Devices Overheating | Raise PFC device-area temp above threshold | Output current derates until temperature drops below thresho
+  Row 5: OBC DAB Primary Devices Overheating | Raise OBC DAB primary device-area temp above threshold | Output current derates until temperature drops below thresho
+  Row 6: OBC DAB Secondary Devices Overheating | Raise OBC DAB secondary device-area temp above threshold | Output current derates until temperature drops below thresho
+  Row 7: DCDC DAB Primary Devices Overheating | Raise DCDC DAB primary device-area temp above threshold | Output current derates until temperature drops below thresho
+  Row 8: DCDC DAB Secondary Devices Overheating | Raise DCDC DAB secondary device-area temp above threshold | Output current derates until temperature drops below thresho
+  Row 9: DCDC Output Connector Overheating | Raise DCDC output connector temp above threshold | Output current derates until temperature drops below thresho
+
+### Table 19 (6×3)
+  Row 0: Parameter | Set Value | Expected Result / Range
+  Row 1: Dead Short Check Timing | Power ON / start-up | Unit checks dead short at start-up
+  Row 2: AC Input Dead Short | Short Connector 1 (L–N) before power ON | Unit does not start; all outputs stopped; latched (no auto r
+  Row 3: HV Output Dead Short | Short Connector 5 (HV+–HV−) before power ON | Unit does not start; all outputs stopped; latched (no auto r
+  Row 4: Short Removal (without reboot) | Remove short while power remains ON | Unit stays latched OFF; no automatic restart
+  Row 5: Recovery Method | Power OFF → Power ON (reboot) | Unit can start normally after reboot
+
+## IMAGES IN DOCUMENT
+  Image rId18: 1387x691 PNG (331KB)
+  Image rId26: 1422x917 PNG (1179KB)
+  Image rId21: 1195x723 PNG (237KB)
+  Image rId17: 1174x634 PNG (216KB)
+  Image rId25: 1156x649 PNG (252KB)
+  Image rId16: 1068x520 PNG (188KB)
+  Image rId20: 1024x600 JPEG (163KB)
+  Image rId24: 1086x687 PNG (217KB)
+  Image rId15: 1280x717 JPEG (105KB)
+  Image rId23: 1024x600 JPEG (145KB)
+  Image rId19: 1002x695 PNG (666KB)
+  Image rId14: 898x565 PNG (474KB)
+  Image rId22: 1450x693 PNG (311KB)
