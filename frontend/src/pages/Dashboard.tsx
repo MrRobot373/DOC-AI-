@@ -40,11 +40,12 @@ export default function Dashboard({ user }: DashboardProps) {
     const [savingSettings, setSavingSettings] = useState(false)
     const [testResult, setTestResult] = useState<string | null>(null)
     const [availableModels] = useState<string[]>([
-        "qwen3.5:397b-cloud",
+        "qwen3-vl:235b-cloud",
         "kimi-k2-thinking:cloud",
-        "glm-5:cloud"
+        "kimi-k2.5:cloud",
+        "nemotron-3-super:cloud"
     ])
-    const [selectedModel, setSelectedModel] = useState("qwen3.5:397b-cloud")
+    const [selectedModel, setSelectedModel] = useState("kimi-k2-thinking:cloud")
     const [reviewMode, setReviewMode] = useState<"normal" | "pro">("pro")
 
     // Review State
