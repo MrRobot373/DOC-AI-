@@ -411,6 +411,15 @@ def _extract_images(doc, filepath):
                     width, height = img.size
                     img_format = img.format or "unknown"
 
+                    # Create a capped full-size version for AI Vision (max 1024x1024)
+                    ai_img = img.copy()
+                    if ai_img.mode != 'RGB':
+                        ai_img = ai_img.convert('RGB')
+                    ai_img.thumbnail((1024, 1024))
+                    ai_buffer = io.BytesIO()
+                    ai_img.save(ai_buffer, format="JPEG")
+                    full_b64 = base64.b64encode(ai_buffer.getvalue()).decode("utf-8")
+
                     # Create a small thumbnail for reference
                     thumb_size = (200, 200)
                     img.thumbnail(thumb_size)
@@ -425,6 +434,7 @@ def _extract_images(doc, filepath):
                         "format": img_format,
                         "size_bytes": len(image_data),
                         "thumbnail_b64": thumb_b64,
+                        "full_b64": full_b64,
                         "is_small": width < 300 or height < 300,
                         "is_very_large": width > 3000 or height > 3000,
                     })

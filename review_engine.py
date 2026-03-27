@@ -189,6 +189,19 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                 except Exception as e:
                     pass
 
+        # Step 5: Image-specific review (only if vision model)
+        if parsed_doc.get("images") and any(m in model.lower() for m in ["vl", "vision", "llava"]):
+            if progress_callback:
+                progress_callback("Reviewing images and diagrams...")
+            
+            if review_mode == "pro":
+                try:
+                    image_findings = _review_images_with_llm(client, model, parsed_doc)
+                    if image_findings:
+                        findings.extend(image_findings)
+                except Exception as e:
+                    pass
+
     except Exception as e:
         # Catch-all for review logic so we at least return what we found
         findings.append({
@@ -428,6 +441,64 @@ Return ONLY the JSON array. If no issues, return [].
     except Exception as e:
         print(f"Error during table review: {str(e)}")
         return []
+
+
+def _review_images_with_llm(client, model, parsed_doc):
+    """Specifically review images, diagrams, and graphs using a Vision model."""
+    if not parsed_doc.get("images"):
+        return []
+
+    findings = []
+    
+    prompt = """You are reviewing a DIAGRAM/GRAPH in a technical document. 
+Check this specific image for:
+1. Missing labels or unclear legends
+2. Unreadable text within the diagram
+3. Misspelled words or typos in the image
+4. Formatting issues or cropped edges
+5. Dummy placeholder images or nonsense text (like 'xzccccxc')
+
+## Output Format:
+Return a JSON array of findings. Each finding must be:
+{
+  "category": "WAVEFORM_DOCUMENTATION",
+  "severity": "MINOR",
+  "page": "-",
+  "section": "Image / Diagram",
+  "comment": "detailed description",
+  "fix": "step-by-step instruction on how to fix this"
+}
+Return ONLY the JSON array. If no issues, return [].
+"""
+
+    # Limit to 10 images to avoid excessive API calls
+    for idx, img in enumerate(parsed_doc["images"][:10]):  
+        if not img.get("full_b64") or img.get("is_small"):
+            continue # skip tiny icons or decorative format items
+            
+        try:
+            response = client.chat(
+                model=model,
+                messages=[{
+                    "role": "user", 
+                    "content": prompt,
+                    "images": [img["full_b64"]]
+                }],
+                options={"temperature": 0.1, "num_predict": 1024},
+            )
+            reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
+            
+            img_findings = _parse_llm_findings(reply, f"llm_image_{idx}")
+            if img_findings:
+                for f in img_findings:
+                    if f["section"] == "-" or f["section"] == "Image / Diagram":
+                        f["section"] = f"Image {idx + 1}"
+                findings.extend(img_findings)
+        except Exception as e:
+            print(f"Error during image {idx} review: {str(e)}")
+            continue
+            
+    return findings
 
 
 def _parse_llm_findings(llm_response, source="llm"):
