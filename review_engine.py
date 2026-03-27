@@ -92,6 +92,57 @@ def create_ollama_client(api_key, host="https://ollama.com"):
     return client
 
 
+class FailoverOllamaClient:
+    """
+    A wrapper around Ollama Client that holds multiple API keys and
+    automatically rotates to the next key when the current one fails.
+    """
+
+    def __init__(self, api_keys, host="https://ollama.com"):
+        if isinstance(api_keys, str):
+            api_keys = [api_keys]
+        self.api_keys = [k.strip() for k in api_keys if k.strip()]
+        self.host = host
+        self.current_index = 0
+        self._clients = [create_ollama_client(k, host) for k in self.api_keys]
+
+    def _get_client(self):
+        return self._clients[self.current_index]
+
+    def _rotate(self):
+        """Move to the next API key. Returns True if a new key is available."""
+        old = self.current_index
+        self.current_index = (self.current_index + 1) % len(self._clients)
+        return self.current_index != old  # True if we actually moved to a different key
+
+    def chat(self, **kwargs):
+        """Call chat with automatic failover across all API keys."""
+        last_error = None
+        for _ in range(len(self._clients)):
+            try:
+                return self._get_client().chat(**kwargs)
+            except Exception as e:
+                last_error = e
+                err_str = str(e).lower()
+                # Only failover on quota/rate/auth errors, not on model errors
+                if any(kw in err_str for kw in ["rate", "limit", "quota", "unauthorized", "forbidden", "429", "503"]):
+                    print(f"[Failover] Key #{self.current_index + 1} failed ({str(e)[:80]}), rotating...")
+                    if not self._rotate():
+                        break  # Only 1 key, can't rotate
+                else:
+                    raise e  # It's not a key issue, re-raise immediately
+        raise last_error  # All keys exhausted
+
+    def list(self):
+        """List models using the current key."""
+        return self._get_client().list()
+
+
+def create_failover_client(api_keys, host="https://ollama.com"):
+    """Create a FailoverOllamaClient from a list of API keys (or a single key)."""
+    return FailoverOllamaClient(api_keys, host)
+
+
 def test_connection(api_key, host="https://ollama.com"):
     """Test connection to Ollama Cloud and return available models."""
     try:

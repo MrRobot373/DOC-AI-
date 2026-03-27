@@ -322,14 +322,14 @@ export default function Dashboard({ user }: DashboardProps) {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label className="text-gray-300 text-sm">API Key</Label>
-                                <Input
-                                    type="password"
+                                <Label className="text-gray-300 text-sm">API Key(s)</Label>
+                                <textarea
                                     value={apiKey}
                                     onChange={e => setApiKey(e.target.value)}
-                                    placeholder="Enter your ollama.com API key"
-                                    className="bg-white/[0.03] border-white/10 font-mono text-sm h-11"
+                                    placeholder={"Paste one or more API keys, separated by commas.\nExample: key1, key2, key3"}
+                                    className="flex w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-sm h-20 focus:outline-none focus:ring-2 focus:ring-white/20 resize-none text-white placeholder:text-gray-600"
                                 />
+                                <p className="text-xs text-gray-500">Multiple keys enable automatic failover if one key's quota is exceeded.</p>
                             </div>
 
                             {availableModels.length > 0 && (

@@ -18,6 +18,7 @@ from supabase import create_client, Client
 from doc_parser import parse_document, parse_excel, get_document_summary
 from review_engine import (
     create_ollama_client,
+    create_failover_client,
     test_connection,
     review_document,
     REVIEW_CATEGORIES,
@@ -238,8 +239,13 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         })
         _save_store(store)
 
-        # Create Ollama client
-        client = create_ollama_client(api_key, host)
+        # Create Ollama client (supports failover with multiple keys)
+        api_keys = [k.strip() for k in api_key.split(",") if k.strip()]
+        if len(api_keys) > 1:
+            client = create_failover_client(api_keys, host)
+            print(f"[Failover] Using {len(api_keys)} API keys with automatic rotation.")
+        else:
+            client = create_ollama_client(api_keys[0], host)
 
         # Progress callback
         def progress_cb(msg):
