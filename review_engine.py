@@ -329,7 +329,13 @@ Example:
         reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
         return _parse_llm_findings(reply, f"llm_chunk_{chunk_num}")
     except Exception as e:
-        print(f"Error during chunk {chunk_num} review: {str(e)}")
+        err_msg = f"Error during chunk {chunk_num} review: {str(e)}"
+        print(err_msg)
+        try:
+            debug_log_path = os.path.join(os.path.dirname(__file__), "uploads", "raw_llm_responses_debug.txt")
+            with open(debug_log_path, "a", encoding="utf-8") as f:
+                f.write(f"\n--- ERROR (Chunk {chunk_num}) ---\n{err_msg}\n")
+        except: pass
         return []
 
 
@@ -374,12 +380,19 @@ Return ONLY the JSON array. If no issues, return [].
         reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
         return _parse_llm_findings(reply, "llm_consistency")
     except Exception as e:
+        err_msg = f"AI consistency check error: {str(e)}"
+        print(err_msg)
+        try:
+            debug_log_path = os.path.join(os.path.dirname(__file__), "uploads", "raw_llm_responses_debug.txt")
+            with open(debug_log_path, "a", encoding="utf-8") as f:
+                f.write(f"\n--- ERROR (Consistency Check) ---\n{err_msg}\n")
+        except: pass
         return [{
             "category": "CROSS_REFERENCE_ACCURACY",
             "severity": "MINOR",
             "page": "-",
             "section": "ALL",
-            "comment": f"AI consistency check error: {str(e)[:200]}",
+            "comment": f"AI consistency check error (Check your API settings): {str(e)[:200]}",
             "source": "llm_error",
         }]
 
@@ -439,7 +452,13 @@ Return ONLY the JSON array. If no issues, return [].
         reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
         return _parse_llm_findings(reply, "llm_tables")
     except Exception as e:
-        print(f"Error during table review: {str(e)}")
+        err_msg = f"Error during table review: {str(e)}"
+        print(err_msg)
+        try:
+            debug_log_path = os.path.join(os.path.dirname(__file__), "uploads", "raw_llm_responses_debug.txt")
+            with open(debug_log_path, "a", encoding="utf-8") as f:
+                f.write(f"\n--- ERROR (Table Review) ---\n{err_msg}\n")
+        except: pass
         return []
 
 
@@ -495,7 +514,13 @@ Return ONLY the JSON array. If no issues, return [].
                         f["section"] = f"Image {idx + 1}"
                 findings.extend(img_findings)
         except Exception as e:
-            print(f"Error during image {idx} review: {str(e)}")
+            err_msg = f"Error during image {idx} review: {str(e)}"
+            print(err_msg)
+            try:
+                debug_log_path = os.path.join(os.path.dirname(__file__), "uploads", "raw_llm_responses_debug.txt")
+                with open(debug_log_path, "a", encoding="utf-8") as f:
+                    f.write(f"\n--- ERROR (Image {idx}) ---\n{err_msg}\n")
+            except: pass
             continue
             
     return findings
