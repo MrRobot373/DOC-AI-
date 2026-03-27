@@ -35,6 +35,16 @@ REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
+# Task Queue setup (Try Redis, fallback to SQLite)
+try:
+    import redis
+    from huey import RedisHuey
+    huey_queue = RedisHuey('docai_tasks', host='localhost')
+except Exception:
+    from huey import SqliteHuey
+    huey_queue = SqliteHuey(filename=os.path.join(UPLOAD_DIR, 'huey_tasks.db'))
+print(f"[*] Task Queue initialized: {type(huey_queue).__name__}")
+
 # Supabase Configuration (Pull from Env)
 SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("VITE_SUPABASE_ANON_KEY") # Use Service Role if possible in production
@@ -213,6 +223,7 @@ Message:
     return jsonify({"success": True, "message": "Feedback received"})
 
 
+@huey_queue.task(retries=1, retry_delay=5)
 def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None):
     """Background worker that runs the full document review."""
     store = _load_store()
@@ -388,13 +399,10 @@ def start_review():
     }
     _save_store(store)
 
-    # Start background thread
-    thread = threading.Thread(
-        target=_run_review_in_background,
-        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model),
-        daemon=True,
+    # Dispatch to Huey task queue (runs asynchronously)
+    _run_review_in_background(
+        review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model
     )
-    thread.start()
 
     return jsonify({"success": True, "review_id": review_id})
 
