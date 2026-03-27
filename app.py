@@ -213,7 +213,7 @@ Message:
     return jsonify({"success": True, "message": "Feedback received"})
 
 
-def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc"):
+def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None):
     """Background worker that runs the full document review."""
     store = _load_store()
     try:
@@ -261,7 +261,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             _save_store(s)
 
         # Run review
-        findings = review_document(client, model, parsed, progress_callback=progress_cb, review_mode=review_mode)
+        findings = review_document(client, model, parsed, progress_callback=progress_cb, review_mode=review_mode, vision_model=vision_model)
 
         # Generate report
         store = _load_store()
@@ -350,6 +350,7 @@ def start_review():
     api_key = request.form.get("api_key", "")
     host = request.form.get("host", "https://ollama.com")
     model = request.form.get("model", "")
+    vision_model = request.form.get("vision_model", "") or None
     review_mode = request.form.get("review_mode", "pro")
     file_type = request.form.get("file_type", "doc")
 
@@ -390,7 +391,7 @@ def start_review():
     # Start background thread
     thread = threading.Thread(
         target=_run_review_in_background,
-        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type),
+        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model),
         daemon=True,
     )
     thread.start()

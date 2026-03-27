@@ -158,11 +158,15 @@ def test_connection(api_key, host="https://ollama.com"):
         return {"success": False, "error": str(e)}
 
 
-def review_document(client, model, parsed_doc, progress_callback=None, review_mode="pro"):
+def review_document(client, model, parsed_doc, progress_callback=None, review_mode="pro", vision_model=None):
     """
     Perform a comprehensive review of a parsed document.
+    Uses 'model' for text/table review and 'vision_model' for image review.
+    If vision_model is not provided, falls back to 'model' for images.
     """
     findings = []
+    text_model = model
+    img_model = vision_model or model
     
     # Define which categories to use based on mode
     if review_mode == "normal":
@@ -193,7 +197,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                 progress_callback(f"Analyzing section {i + 1}/{total_chunks} with AI...")
 
             try:
-                chunk_findings = _review_chunk_with_llm(client, model, chunk, doc_summary, i + 1, active_categories)
+                chunk_findings = _review_chunk_with_llm(client, text_model, chunk, doc_summary, i + 1, active_categories)
                 if chunk_findings:
                     findings.extend(chunk_findings)
             except Exception as e:
@@ -206,7 +210,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         # In Normal mode, skip full consistency check
         if review_mode == "pro":
             try:
-                consistency_findings = _review_consistency_with_llm(client, model, doc_summary)
+                consistency_findings = _review_consistency_with_llm(client, text_model, doc_summary)
                 if consistency_findings:
                     findings.extend(consistency_findings)
             except Exception as e:
@@ -226,7 +230,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
             
             if review_mode == "pro":
                 try:
-                    table_findings = _review_tables_with_llm(client, model, parsed_doc)
+                    table_findings = _review_tables_with_llm(client, text_model, parsed_doc)
                     if table_findings:
                         findings.extend(table_findings)
                 except Exception as e:
@@ -234,20 +238,20 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
             elif "UNITS_CALCULATIONS" in active_categories:
                 # Still check tables for units in normal mode
                 try:
-                    table_findings = _review_tables_with_llm(client, model, parsed_doc, ["UNITS_CALCULATIONS"])
+                    table_findings = _review_tables_with_llm(client, text_model, parsed_doc, ["UNITS_CALCULATIONS"])
                     if table_findings:
                         findings.extend(table_findings)
                 except Exception as e:
                     pass
 
-        # Step 5: Image-specific review (only if vision model)
-        if parsed_doc.get("images") and any(m in model.lower() for m in ["vl", "vision", "llava"]):
+        # Step 5: Image-specific review (use vision model)
+        if parsed_doc.get("images") and any(m in img_model.lower() for m in ["vl", "vision", "llava", "qwen3.5"]):
             if progress_callback:
-                progress_callback("Reviewing images and diagrams...")
+                progress_callback(f"Reviewing images and diagrams with {img_model}...")
             
             if review_mode == "pro":
                 try:
-                    image_findings = _review_images_with_llm(client, model, parsed_doc)
+                    image_findings = _review_images_with_llm(client, img_model, parsed_doc)
                     if image_findings:
                         findings.extend(image_findings)
                 except Exception as e:

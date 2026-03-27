@@ -10,6 +10,7 @@ from openpyxl.styles import (
     Font, PatternFill, Alignment, Border, Side, numbers
 )
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 
 from review_engine import REVIEW_CATEGORIES, SEVERITY_LEVELS
 
@@ -49,9 +50,18 @@ def generate_excel_report(findings, doc_filename, output_path):
     wrap_align = Alignment(vertical="top", wrap_text=True)
     center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
 
+    # Status color fills
+    status_fills = {
+        "OPEN": PatternFill(start_color="ffcdd2", end_color="ffcdd2", fill_type="solid"),
+        "WORKING": PatternFill(start_color="fff9c4", end_color="fff9c4", fill_type="solid"),
+        "CLOSED": PatternFill(start_color="c8e6c9", end_color="c8e6c9", fill_type="solid"),
+        "IGNORE": PatternFill(start_color="e0e0e0", end_color="e0e0e0", fill_type="solid"),
+        "N/A": PatternFill(start_color="e0e0e0", end_color="e0e0e0", fill_type="solid"),
+    }
+
     # Headers
-    headers = ["No", "Section", "Comment", "Fix", "Category", "Severity", "Date", "Status"]
-    col_widths = [6, 15, 50, 50, 22, 12, 14, 12]
+    headers = ["No", "Page", "Section", "Comment", "Fix", "Category", "Severity", "Date", "Status"]
+    col_widths = [6, 8, 15, 50, 50, 22, 12, 14, 14]
 
     for col_idx, (header, width) in enumerate(zip(headers, col_widths), 1):
         cell = ws.cell(row=1, column=col_idx, value=header)
@@ -77,28 +87,47 @@ def generate_excel_report(findings, doc_filename, output_path):
 
         row_data = [
             finding.get("id", row_idx - 1),
+            finding.get("page", "-"),
             finding.get("section", "-"),
             finding.get("comment", ""),
             finding.get("fix", ""),
             f"{cat_icon} {cat_name}",
             sev_label,
             review_date,
-            "Open",
+            "OPEN",
         ]
 
         for col_idx, value in enumerate(row_data, 1):
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.font = body_font
             cell.border = border
-            if col_idx in (1, 6, 7, 8):
+            if col_idx in (1, 2, 7, 8, 9):
                 cell.alignment = center_align
             else:
                 cell.alignment = wrap_align
 
             # Apply severity color to severity column
-            if col_idx == 6:
+            if col_idx == 7:
                 cell.fill = sev_fill
                 cell.font = Font(name="Calibri", size=10, bold=True)
+
+            # Apply status color to status column
+            if col_idx == 9:
+                cell.fill = status_fills.get(str(value), PatternFill())
+                cell.font = Font(name="Calibri", size=10, bold=True)
+
+    # Add data validation dropdown for Status column
+    status_col_letter = get_column_letter(9)  # Column I = Status
+    dv = DataValidation(
+        type="list",
+        formula1='"OPEN,WORKING,CLOSED,IGNORE,N/A"',
+        allow_blank=False,
+        showErrorMessage=True,
+        errorTitle="Invalid Status",
+        error="Please select: OPEN, WORKING, CLOSED, IGNORE, or N/A",
+    )
+    dv.sqref = f"{status_col_letter}2:{status_col_letter}{len(findings) + 1}"
+    ws.add_data_validation(dv)
 
     # Row height for readability
     for row_idx in range(2, len(findings) + 2):

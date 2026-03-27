@@ -46,6 +46,7 @@ export default function Dashboard({ user }: DashboardProps) {
         "nemotron-3-super:cloud"
     ])
     const [selectedModel, setSelectedModel] = useState("kimi-k2-thinking:cloud")
+    const [visionModel, setVisionModel] = useState("qwen3-vl:235b-cloud")
     const [reviewMode, setReviewMode] = useState<"normal" | "pro">("pro")
 
     // Review State
@@ -160,6 +161,7 @@ export default function Dashboard({ user }: DashboardProps) {
         formData.append('api_key', apiKey)
         formData.append('host', hostUrl)
         formData.append('model', selectedModel || "gpt-oss:120b-cloud")
+        formData.append('vision_model', visionModel)
         formData.append('review_mode', reviewMode)
         formData.append('document', selectedFile)
         formData.append('file_type', fileType)
@@ -333,8 +335,9 @@ export default function Dashboard({ user }: DashboardProps) {
                             </div>
 
                             {availableModels.length > 0 && (
+                                <>
                                 <div className="space-y-2">
-                                    <Label className="text-gray-300 text-sm">Model</Label>
+                                    <Label className="text-gray-300 text-sm">Text Model</Label>
                                     <select
                                         value={selectedModel} onChange={e => setSelectedModel(e.target.value)}
                                         className="flex h-11 w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
@@ -343,7 +346,21 @@ export default function Dashboard({ user }: DashboardProps) {
                                             <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">{m}</option>
                                         ))}
                                     </select>
+                                    <p className="text-xs text-gray-500">Used for text, tables, and consistency checks.</p>
                                 </div>
+                                <div className="space-y-2">
+                                    <Label className="text-gray-300 text-sm">Vision Model (for Images/Diagrams)</Label>
+                                    <select
+                                        value={visionModel} onChange={e => setVisionModel(e.target.value)}
+                                        className="flex h-11 w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+                                    >
+                                        {availableModels.map(m => (
+                                            <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">{m}</option>
+                                        ))}
+                                    </select>
+                                    <p className="text-xs text-gray-500">Used for reviewing images, diagrams, and flowcharts.</p>
+                                </div>
+                                </>
                             )}
 
                             {testResult && (
