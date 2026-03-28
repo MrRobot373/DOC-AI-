@@ -35,15 +35,26 @@ REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-# Task Queue setup (Try Redis, fallback to SQLite)
-try:
-    import redis
-    from huey import RedisHuey
-    huey_queue = RedisHuey('docai_tasks', host='localhost')
-except Exception:
-    from huey import SqliteHuey
-    huey_queue = SqliteHuey(filename=os.path.join(UPLOAD_DIR, 'huey_tasks.db'))
-print(f"[*] Task Queue initialized: {type(huey_queue).__name__}")
+# Task Queue setup
+# - On Render/cloud (RENDER env var): run tasks immediately in-thread (no separate worker needed)
+# - On local server with Redis: use RedisHuey (full crash recovery)
+# - On local server without Redis: use SqliteHuey (persistent queue, requires start_worker.bat)
+IS_CLOUD_ENV = os.environ.get("RENDER") or os.environ.get("FLY_APP_NAME") or os.environ.get("HEROKU_APP_NAME")
+if IS_CLOUD_ENV:
+    from huey import MemoryHuey
+    huey_queue = MemoryHuey(immediate=True)
+    print(f"[*] Task Queue: ImmediateHuey (cloud mode - tasks run in-thread)")
+else:
+    try:
+        import redis as _redis
+        _redis.Redis(host='localhost', socket_connect_timeout=1).ping()
+        from huey import RedisHuey
+        huey_queue = RedisHuey('docai_tasks', host='localhost')
+        print(f"[*] Task Queue: RedisHuey (crash-proof local queue)")
+    except Exception:
+        from huey import SqliteHuey
+        huey_queue = SqliteHuey(filename=os.path.join(UPLOAD_DIR, 'huey_tasks.db'))
+        print(f"[*] Task Queue: SqliteHuey (persistent local queue - run start_worker.bat)")
 
 # Supabase Configuration (Pull from Env)
 SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL")
