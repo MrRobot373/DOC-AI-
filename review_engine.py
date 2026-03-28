@@ -245,7 +245,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                     pass
 
         # Step 5: Image-specific review (use vision model)
-        if parsed_doc.get("images") and any(m in img_model.lower() for m in ["vl", "vision", "llava", "qwen3.5"]):
+        if parsed_doc.get("images") and any(m in img_model.lower() for m in ["vl", "vision", "llava", "qwen"]):
             if progress_callback:
                 progress_callback(f"Reviewing images and diagrams with {img_model}...")
             
