@@ -43,10 +43,12 @@ export default function Dashboard({ user }: DashboardProps) {
         "qwen3-vl:235b-cloud",
         "kimi-k2-thinking:cloud",
         "kimi-k2.5:cloud",
-        "nemotron-3-super:cloud"
+        "nemotron-3-super:cloud",
+        "qwen3.5:397b-cloud",
+        "minimax-m2.7:cloud"
     ])
-    const [selectedModel, setSelectedModel] = useState("kimi-k2-thinking:cloud")
-    const [visionModel, setVisionModel] = useState("qwen3-vl:235b-cloud")
+    const [selectedModel, setSelectedModel] = useState("nemotron-3-super:cloud")
+    const [visionModel, setVisionModel] = useState("qwen3.5:397b-cloud")
     const [reviewMode, setReviewMode] = useState<"normal" | "pro">("pro")
 
     // Review State
@@ -336,30 +338,30 @@ export default function Dashboard({ user }: DashboardProps) {
 
                             {availableModels.length > 0 && (
                                 <>
-                                <div className="space-y-2">
-                                    <Label className="text-gray-300 text-sm">Text Model</Label>
-                                    <select
-                                        value={selectedModel} onChange={e => setSelectedModel(e.target.value)}
-                                        className="flex h-11 w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
-                                    >
-                                        {availableModels.map(m => (
-                                            <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">{m}</option>
-                                        ))}
-                                    </select>
-                                    <p className="text-xs text-gray-500">Used for text, tables, and consistency checks.</p>
-                                </div>
-                                <div className="space-y-2">
-                                    <Label className="text-gray-300 text-sm">Vision Model (for Images/Diagrams)</Label>
-                                    <select
-                                        value={visionModel} onChange={e => setVisionModel(e.target.value)}
-                                        className="flex h-11 w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
-                                    >
-                                        {availableModels.map(m => (
-                                            <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">{m}</option>
-                                        ))}
-                                    </select>
-                                    <p className="text-xs text-gray-500">Used for reviewing images, diagrams, and flowcharts.</p>
-                                </div>
+                                    <div className="space-y-2">
+                                        <Label className="text-gray-300 text-sm">Text Model</Label>
+                                        <select
+                                            value={selectedModel} onChange={e => setSelectedModel(e.target.value)}
+                                            className="flex h-11 w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+                                        >
+                                            {availableModels.map(m => (
+                                                <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">{m}</option>
+                                            ))}
+                                        </select>
+                                        <p className="text-xs text-gray-500">Used for text, tables, and consistency checks.</p>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label className="text-gray-300 text-sm">Vision Model (for Images/Diagrams)</Label>
+                                        <select
+                                            value={visionModel} onChange={e => setVisionModel(e.target.value)}
+                                            className="flex h-11 w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+                                        >
+                                            {availableModels.map(m => (
+                                                <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">{m}</option>
+                                            ))}
+                                        </select>
+                                        <p className="text-xs text-gray-500">Used for reviewing images, diagrams, and flowcharts.</p>
+                                    </div>
                                 </>
                             )}
 
