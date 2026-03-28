@@ -246,12 +246,13 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
 
         # Step 5: Image-specific review (use vision model)
         if parsed_doc.get("images") and any(m in img_model.lower() for m in ["vl", "vision", "llava", "qwen"]):
+            total_images = min(len([i for i in parsed_doc["images"] if i.get("full_b64") and not i.get("is_small")]), 10)
             if progress_callback:
-                progress_callback(f"Reviewing images and diagrams with {img_model}...")
+                progress_callback(f"Reviewing {total_images} images/diagrams with {img_model}...", 89)
             
             if review_mode == "pro":
                 try:
-                    image_findings = _review_images_with_llm(client, img_model, parsed_doc)
+                    image_findings = _review_images_with_llm(client, img_model, parsed_doc, doc_summary, progress_callback)
                     if image_findings:
                         findings.extend(image_findings)
                 except Exception as e:
@@ -517,38 +518,72 @@ Return ONLY the JSON array. If no issues, return [].
         return []
 
 
-def _review_images_with_llm(client, model, parsed_doc):
-    """Specifically review images, diagrams, and graphs using a Vision model."""
+def _review_images_with_llm(client, model, parsed_doc, doc_summary="", progress_callback=None):
+    """Review images/diagrams using a Vision model, cross-referencing with document text."""
     if not parsed_doc.get("images"):
         return []
 
     findings = []
     
-    prompt = """You are reviewing a DIAGRAM/GRAPH in a technical document. 
-Check this specific image for:
-1. Missing labels or unclear legends
+    # Build a mapping of nearby text for each image for cross-referencing
+    all_text_by_section = {}
+    for section in parsed_doc.get("sections", []):
+        heading = section.get("heading", "Unknown")
+        paragraphs_text = " ".join(p["text"] for p in section.get("paragraphs", []) if p.get("text"))
+        if paragraphs_text:
+            all_text_by_section[heading] = paragraphs_text[:1500]  # Cap per section
+    
+    # Build surrounding text context (compact version)
+    nearby_text = "\n".join([f"[{h}]: {t[:500]}" for h, t in list(all_text_by_section.items())[:15]])
+    
+    # Filter to reviewable images
+    reviewable_images = [img for img in parsed_doc["images"] if img.get("full_b64") and not img.get("is_small")]
+    reviewable_images = reviewable_images[:10]  # Limit to 10
+    total_images = len(reviewable_images)
+    
+    for idx, img in enumerate(reviewable_images):
+        if progress_callback:
+            pct = 89 + int((idx / max(total_images, 1)) * 6)  # 89% → 95%
+            progress_callback(f"Analyzing image {idx + 1}/{total_images} with vision AI...", pct)
+        
+        prompt = f"""You are reviewing a DIAGRAM / GRAPH / IMAGE in a technical engineering document.
+
+You have TWO jobs:
+
+**JOB 1 — Image Quality Check:**
+1. Missing labels, axis titles, or unclear legends
 2. Unreadable text within the diagram
-3. Misspelled words or typos in the image
-4. Formatting issues or cropped edges
-5. Dummy placeholder images or nonsense text (like 'xzccccxc')
+3. Misspelled words or typos visible in the image
+4. Formatting issues, cropped edges, or low resolution
+5. Dummy/placeholder images or nonsense text
+
+**JOB 2 — Cross-Check Image vs Document Text:**
+The document text near this image is provided below. Compare the image content against the text:
+6. Does the image match what the text describes? (e.g., if text says "output voltage is 3.3V" but the graph shows 5V, that's a CRITICAL error)
+7. Are values/measurements in the image consistent with the document text?
+8. Are component names, signal names, or labels in the image consistent with the text?
+9. Is the image referenced properly in the text?
+
+## Surrounding Document Text (for cross-reference):
+{nearby_text[:3000]}
+
+## Document Summary:
+{doc_summary[:1000]}
 
 ## Output Format:
 Return a JSON array of findings. Each finding must be:
-{
+{{
   "category": "WAVEFORM_DOCUMENTATION",
-  "severity": "MINOR",
+  "severity": "CRITICAL|MAJOR|MINOR",
   "page": "-",
   "section": "Image / Diagram",
-  "comment": "detailed description",
+  "comment": "detailed description of issue found",
   "fix": "step-by-step instruction on how to fix this"
-}
+}}
+
+IMPORTANT: Use severity CRITICAL if image data contradicts the document text. Use MAJOR for missing labels. Use MINOR for formatting issues.
 Return ONLY the JSON array. If no issues, return [].
 """
-
-    # Limit to 10 images to avoid excessive API calls
-    for idx, img in enumerate(parsed_doc["images"][:10]):  
-        if not img.get("full_b64") or img.get("is_small"):
-            continue # skip tiny icons or decorative format items
             
         try:
             response = client.chat(
@@ -558,7 +593,7 @@ Return ONLY the JSON array. If no issues, return [].
                     "content": prompt,
                     "images": [img["full_b64"]]
                 }],
-                options={"temperature": 0.1, "num_predict": 1024},
+                options={"temperature": 0.1, "num_predict": 2048},
             )
             reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
             

@@ -270,11 +270,14 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             client = create_ollama_client(api_keys[0], host)
 
         # Progress callback
-        def progress_cb(msg):
+        def progress_cb(msg, explicit_pct=None):
             s = _load_store()
             if review_id not in s: return
-            current = s[review_id].get("progress", 20)
-            new_progress = min(current + 5, 88)
+            if explicit_pct is not None:
+                new_progress = explicit_pct
+            else:
+                current = s[review_id].get("progress", 20)
+                new_progress = min(current + 5, 88)
             s[review_id].update({
                 "progress": new_progress,
                 "message": msg,
