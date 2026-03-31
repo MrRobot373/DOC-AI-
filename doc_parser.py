@@ -185,80 +185,126 @@ def parse_document(filepath):
 
 def parse_excel(filepath):
     """
-    Parse an Excel (.xlsx) file and extract content in a structured format compatible with Word parser.
-    Each sheet is treated as a major section.
+    Parse an Excel (.xlsx/.xls) file and extract content in a structured format
+    fully compatible with the Word parser output. Each sheet becomes a section
+    AND a table entry so all review steps work correctly.
     """
     try:
         wb = openpyxl.load_workbook(filepath, data_only=True)
-        parsed = {
-            "filename": os.path.basename(filepath),
-            "sections": [],
-            "tables": [],
-            "images": [],
-            "statistics": {},
-            "metadata": {"source_type": "excel"}
-        }
-
+        sections = []
+        tables = []
         total_words = 0
         all_text_lines = []
-        
-        for sheet_name in wb.sheetnames:
+
+        for sheet_idx, sheet_name in enumerate(wb.sheetnames):
             ws = wb[sheet_name]
-            paragraphs = []
             
-            # Add sheet title as a heading
+            # ---- Build rows data (skip fully empty rows) ----
+            sheet_rows = []
+            num_cols = 0
+            for row in ws.iter_rows(values_only=True):
+                cells = [str(cell) if cell is not None else "" for cell in row]
+                if not any(c.strip() for c in cells):
+                    continue
+                num_cols = max(num_cols, len(cells))
+                sheet_rows.append(cells)
+            
+            if not sheet_rows:
+                continue  # skip blank sheets
+            
+            # ---- Build section (for chunk-based text review) ----
+            paragraphs = []
+            # Sheet heading
             paragraphs.append({
                 "text": f"SHEET: {sheet_name}",
                 "heading_level": 1,
                 "alignment": "LEFT",
+                "page": sheet_idx + 1,
                 "runs": [{"text": f"SHEET: {sheet_name}", "bold": True, "italic": False, "size_pt": 14}],
-                "has_image": False
+                "has_image": False,
             })
-            all_text_lines.append(f"SHEET: {sheet_name}")
-
-            # Extract cell data row by row
-            for row in ws.iter_rows(values_only=True):
-                # Filter out empty rows
-                if not any(cell is not None and str(cell).strip() != "" for cell in row):
-                    continue
+            all_text_lines.append(f"=== SHEET: {sheet_name} ({len(sheet_rows)} rows × {num_cols} cols) ===")
+            
+            # Detect if the first row is a header row
+            header_row = sheet_rows[0] if sheet_rows else []
+            
+            # Add each row as a paragraph with row number context
+            for row_idx, row_cells in enumerate(sheet_rows):
+                row_label = f"Row {row_idx + 1}"
+                if row_idx == 0:
+                    row_label = "Header Row"
+                row_text = f"[{row_label}] {' | '.join(row_cells)}"
+                word_count = len(row_text.split())
+                total_words += word_count
                 
-                row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
-                if row_text.strip():
-                    total_words += len(row_text.split())
-                    paragraphs.append({
-                        "text": row_text,
-                        "heading_level": 0,
-                        "alignment": "LEFT",
-                        "runs": [{"text": row_text, "bold": False, "italic": False, "size_pt": 10}],
-                        "has_image": False
-                    })
-                    all_text_lines.append(row_text)
-
-            parsed["sections"].append({
-                "title": sheet_name,
+                paragraphs.append({
+                    "text": row_text,
+                    "heading_level": None,
+                    "alignment": "LEFT",
+                    "page": sheet_idx + 1,
+                    "runs": [{"text": row_text, "bold": (row_idx == 0), "italic": False, "size_pt": 10}],
+                    "has_image": False,
+                })
+                all_text_lines.append(row_text)
+            
+            sections.append({
+                "heading": f"Sheet: {sheet_name}",
                 "level": 1,
-                "paragraphs": paragraphs
+                "page": sheet_idx + 1,
+                "paragraphs": paragraphs,
+            })
+            
+            # ---- Build table entry (for table-specific review) ----
+            tables.append({
+                "index": sheet_idx,
+                "name": f"Sheet: {sheet_name}",
+                "num_rows": len(sheet_rows),
+                "num_cols": num_cols,
+                "rows": [row_cells for row_cells in sheet_rows],
             })
 
-        # Set statistics
-        parsed["statistics"] = {
-            "total_words": total_words,
-            "total_sections": len(wb.sheetnames),
-            "total_tables": len(wb.sheetnames), 
-            "total_images": 0
+        # ---- Build formatting stub (required by get_document_summary) ----
+        formatting = {
+            "default_font": None,
+            "default_size": None,
+            "page_margins": {},
         }
-        parsed["raw_text"] = "\n".join(all_text_lines)
+
+        parsed = {
+            "filename": os.path.basename(filepath),
+            "sections": sections,
+            "tables": tables,
+            "images": [],
+            "formatting": formatting,
+            "statistics": {
+                "total_words": total_words,
+                "total_pages": len(wb.sheetnames),
+                "total_characters": sum(len(line) for line in all_text_lines),
+                "total_sections": len(sections),
+                "total_tables": len(tables),
+                "total_images": 0,
+                "empty_sections": 0,
+            },
+            "metadata": {"source_type": "excel"},
+            "raw_text": "\n".join(all_text_lines),
+        }
 
         return parsed
 
     except Exception as e:
         return {
             "filename": os.path.basename(filepath),
-            "statistics": {"total_words": 0, "total_sections": 0, "total_tables": 0, "total_images": 0},
-            "sections": [{"title": "Error", "level": 1, "paragraphs": [{"text": f"Error parsing Excel: {str(e)}", "heading_level": 0, "alignment": "LEFT", "runs": [], "has_image": False}]}],
+            "statistics": {
+                "total_words": 0, "total_pages": 0, "total_characters": 0,
+                "total_sections": 0, "total_tables": 0, "total_images": 0, "empty_sections": 0,
+            },
+            "formatting": {"default_font": None, "default_size": None, "page_margins": {}},
+            "sections": [{"heading": "Error", "level": 1, "page": 1,
+                          "paragraphs": [{"text": f"Error parsing Excel: {str(e)}", "heading_level": None,
+                                          "alignment": "LEFT", "page": 1, "runs": [], "has_image": False}]}],
             "tables": [],
             "images": [],
-            "raw_text": ""
+            "raw_text": "",
         }
 
 
