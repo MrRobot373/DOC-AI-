@@ -8,3 +8,5 @@ Pillow
 gunicorn
 nltk
 supabase
+huey
+redis
