@@ -284,7 +284,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
 def _run_local_checks(parsed_doc):
     """Run checks that don't need LLM - formatting, fonts, spacing, images."""
     findings = []
-    fmt = parsed_doc["formatting"]
+    fmt = parsed_doc.get("formatting", {})
 
     # Check for font inconsistencies
     default_font = fmt.get("default_font")

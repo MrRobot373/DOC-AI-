@@ -527,11 +527,11 @@ def get_document_summary(parsed):
     lines.append(f"Total Images: {parsed['statistics']['total_images']}")
 
     # Formatting metadata
-    fmt = parsed["formatting"]
-    if fmt["default_font"]:
-        lines.append(f"Default Font: {fmt['default_font']}")
-    if fmt["default_size"]:
-        lines.append(f"Default Font Size: {fmt['default_size']}pt")
+    fmt = parsed.get("formatting", {})
+    if fmt.get("default_font"):
+        lines.append(f"Default Font: {fmt.get('default_font')}")
+    if fmt.get("default_size"):
+        lines.append(f"Default Font Size: {fmt.get('default_size')}pt")
     margins = fmt.get("page_margins", {})
     if margins:
         lines.append(f"Page Margins (inches): Top={margins.get('top')}, Bottom={margins.get('bottom')}, Left={margins.get('left')}, Right={margins.get('right')}")
