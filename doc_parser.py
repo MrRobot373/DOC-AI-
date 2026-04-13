@@ -78,12 +78,44 @@ def parse_document(filepath):
     current_section = None
     all_text_lines = []
     current_page = 1
+    
+    # Heuristic page estimation
+    # Calculate lines per page from margins and font size
+    margins = result["formatting"].get("page_margins", {})
+    top_margin = margins.get("top", 1.0)
+    bottom_margin = margins.get("bottom", 1.0)
+    default_size_pt = result["formatting"].get("default_size", 11)
+    
+    # A4/Letter = ~11 inches height. Usable height = 11 - top - bottom
+    usable_height_inches = 11.0 - top_margin - bottom_margin
+    line_height_inches = (default_size_pt * 1.15) / 72  # 1.15 line spacing
+    lines_per_page = max(int(usable_height_inches / line_height_inches), 30) if line_height_inches > 0 else 45
+    cumulative_lines = 0
+    pages_from_breaks = set()  # Track which pages we detected via hard breaks
 
     for para_idx, para in enumerate(doc.paragraphs):
         # Check for page breaks (hard breaks or rendered breaks)
+        has_page_break = False
         for run in para.runs:
             if 'lastRenderedPageBreak' in run._element.xml or 'w:br w:type="page"' in run._element.xml:
-                current_page += 1
+                has_page_break = True
+        
+        if has_page_break:
+            current_page += 1
+            cumulative_lines = 0
+            pages_from_breaks.add(current_page)
+        else:
+            # Estimate lines taken by this paragraph
+            text = para.text.strip()
+            if text:
+                # Estimate character width ~80 chars per line for typical doc
+                est_lines = max(1, len(text) // 80 + 1)
+                cumulative_lines += est_lines
+                
+                # If cumulative lines exceed page capacity, bump page
+                if cumulative_lines >= lines_per_page:
+                    current_page += 1
+                    cumulative_lines = 0
 
         text = para.text.strip()
         style_name = para.style.name if para.style else ""
@@ -627,16 +659,18 @@ def get_section_chunks(parsed, max_chars=6000):
 
 
 def _section_to_text(section):
-    """Convert a section dict to readable text."""
+    """Convert a section dict to readable text with paragraph index markers."""
     lines = [f"[Section: {section['heading']} (Starts on Page {section.get('page', 1)})]"]
     current_page = None
     for para in section["paragraphs"]:
         if para["text"]:
             para_page = para.get("page", 1)
+            para_idx = para.get("index", 0)
             if current_page != para_page:
                 lines.append(f"\n--- [Page {para_page}] ---")
                 current_page = para_page
-            lines.append(para["text"])
+            # Include paragraph index marker for precise error location
+            lines.append(f"[¶{para_idx}] {para['text']}")
     return "\n".join(lines)
 
 

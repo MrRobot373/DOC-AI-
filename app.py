@@ -36,15 +36,12 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
 # Task Queue setup
-# - On Render/cloud (RENDER env var): run tasks immediately in-thread (no separate worker needed)
-# - On local server with Redis: use RedisHuey (full crash recovery)
-# - On local server without Redis: use SqliteHuey (persistent queue, requires start_worker.bat)
-IS_CLOUD_ENV = os.environ.get("RENDER") or os.environ.get("FLY_APP_NAME") or os.environ.get("HEROKU_APP_NAME")
-if IS_CLOUD_ENV:
-    from huey import MemoryHuey
-    huey_queue = MemoryHuey(immediate=True)
-    print(f"[*] Task Queue: ImmediateHuey (cloud mode - tasks run in-thread)")
-else:
+# Cloud environments use threading (NOT Huey immediate mode which blocks the HTTP request)
+# Local environments use Huey with Redis or Sqlite for crash recovery
+IS_CLOUD_ENV = os.environ.get("RENDER") or os.environ.get("FLY_APP_NAME") or os.environ.get("HEROKU_APP_NAME") or os.environ.get("GCP_PROJECT")
+USE_THREADING = IS_CLOUD_ENV  # Threading allows progress polling to work
+
+if not USE_THREADING:
     try:
         import redis as _redis
         _redis.Redis(host='localhost', socket_connect_timeout=1).ping()
@@ -55,6 +52,9 @@ else:
         from huey import SqliteHuey
         huey_queue = SqliteHuey(filename=os.path.join(UPLOAD_DIR, 'huey_tasks.db'))
         print(f"[*] Task Queue: SqliteHuey (persistent local queue - run start_worker.bat)")
+else:
+    huey_queue = None
+    print(f"[*] Task Queue: Threading (cloud mode - progress polling works correctly)")
 
 # Supabase Configuration (Pull from Env)
 SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL")
@@ -234,7 +234,6 @@ Message:
     return jsonify({"success": True, "message": "Feedback received"})
 
 
-@huey_queue.task(retries=1, retry_delay=5)
 def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None):
     """Background worker that runs the full document review."""
     store = _load_store()
@@ -314,12 +313,20 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             category_counts[cat] = category_counts.get(cat, 0) + 1
 
         # Mark done
+        # Add default status and fix_type to each finding
+        for f in findings:
+            if "status" not in f:
+                f["status"] = "OPEN"
+            if "fix_type" not in f:
+                f["fix_type"] = f.get("fix_type", "MANUAL")
+
         store = _load_store()
         store[review_id].update({
             "status": "done",
             "message": "Review complete!",
             "progress": 100,
             "report_filename": report_filename,
+            "original_filepath": filepath,
             "document_info": {
                 "filename": original_filename,
                 "words": parsed["statistics"]["total_words"],
@@ -361,12 +368,18 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             })
             _save_store(store)
     finally:
-        # Clean up uploaded file
-        try:
-            if os.path.exists(filepath):
-                os.remove(filepath)
-        except Exception:
-            pass
+        # Keep uploaded file for 24h for potential auto-fix application
+        # Schedule cleanup after 24h instead of immediate deletion
+        def _delayed_cleanup(path, delay_seconds=86400):
+            import time
+            time.sleep(delay_seconds)
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+        cleanup_thread = threading.Thread(target=_delayed_cleanup, args=(filepath,), daemon=True)
+        cleanup_thread.start()
 
 
 @app.route("/api/review", methods=["POST"])
@@ -413,10 +426,20 @@ def start_review():
     }
     _save_store(store)
 
-    # Dispatch to Huey task queue (runs asynchronously)
-    _run_review_in_background(
-        review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model
-    )
+    # Dispatch to background thread (allows progress polling to work)
+    if USE_THREADING:
+        thread = threading.Thread(
+            target=_run_review_in_background,
+            args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model),
+            daemon=True
+        )
+        thread.start()
+    else:
+        # Local with Huey — decorate dynamically
+        huey_task = huey_queue.task(retries=1, retry_delay=5)(_run_review_in_background)
+        huey_task(
+            review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model
+        )
 
     return jsonify({"success": True, "review_id": review_id})
 
@@ -446,10 +469,93 @@ def get_progress(review_id):
     })
 
 
+@app.route("/api/update-finding/<review_id>", methods=["POST"])
+def update_finding(review_id):
+    """Update a finding's status (Accept/Reject/Working)."""
+    data = request.get_json()
+    finding_id = data.get("finding_id")
+    new_status = data.get("status", "OPEN")
+
+    if new_status not in ["OPEN", "WORKING", "CLOSED", "IGNORE", "N/A"]:
+        return jsonify({"success": False, "error": f"Invalid status: {new_status}"}), 400
+
+    store = _load_store()
+    if review_id not in store or store[review_id].get("status") != "done":
+        return jsonify({"success": False, "error": "Review not found or not complete"}), 404
+
+    findings = store[review_id].get("findings", [])
+    updated = False
+    for f in findings:
+        if f.get("id") == finding_id:
+            f["status"] = new_status
+            updated = True
+            break
+
+    if not updated:
+        return jsonify({"success": False, "error": f"Finding {finding_id} not found"}), 404
+
+    store[review_id]["findings"] = findings
+    _save_store(store)
+    return jsonify({"success": True, "finding_id": finding_id, "status": new_status})
+
+
+@app.route("/api/apply-fixes/<review_id>", methods=["POST"])
+def apply_fixes(review_id):
+    """Apply auto-fixable findings to a copy of the document."""
+    store = _load_store()
+    if review_id not in store or store[review_id].get("status") != "done":
+        return jsonify({"success": False, "error": "Review not found or not complete"}), 404
+
+    data = request.get_json() or {}
+    finding_ids = data.get("finding_ids")  # None = apply all auto-fixable
+
+    findings = store[review_id].get("findings", [])
+    original_filepath = store[review_id].get("original_filepath")
+
+    if not original_filepath or not os.path.exists(original_filepath):
+        return jsonify({"success": False, "error": "Original document no longer available. Please re-upload."}), 404
+
+    try:
+        from doc_fixer import apply_fixes as do_apply_fixes
+        result = do_apply_fixes(original_filepath, findings, finding_ids)
+        if result["success"]:
+            fixed_filename = result["fixed_filename"]
+            return jsonify({
+                "success": True,
+                "fixed_filename": fixed_filename,
+                "changes_applied": result["changes_applied"],
+                "changes_skipped": result["changes_skipped"],
+            })
+        else:
+            return jsonify({"success": False, "error": result.get("error", "Unknown error")})
+    except ImportError:
+        return jsonify({"success": False, "error": "Auto-fix module not available yet."})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
 @app.route("/api/download/<report_filename>")
 def download_report(report_filename):
-    """Download a generated Excel report."""
+    """Download a generated Excel report (regenerated with latest statuses)."""
+    # Find the review that owns this report
+    store = _load_store()
+    owner_review = None
+    for rid, rdata in store.items():
+        if rdata.get("report_filename") == report_filename:
+            owner_review = rdata
+            break
+
     report_path = os.path.join(REPORTS_DIR, report_filename)
+
+    # If we found the review, regenerate with latest statuses
+    if owner_review and owner_review.get("findings"):
+        try:
+            findings = owner_review["findings"]
+            doc_name = owner_review.get("document_info", {}).get("filename", "Unknown")
+            generate_excel_report(findings, doc_name, report_path)
+        except Exception as e:
+            print(f"Report regeneration error: {e}")
+
     if os.path.exists(report_path):
         return send_file(
             report_path,
@@ -458,6 +564,19 @@ def download_report(report_filename):
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     return jsonify({"error": "Report not found"}), 404
+
+
+@app.route("/api/download-fixed/<filename>")
+def download_fixed_doc(filename):
+    """Download the auto-fixed document."""
+    fixed_path = os.path.join(REPORTS_DIR, filename)
+    if os.path.exists(fixed_path):
+        return send_file(
+            fixed_path,
+            as_attachment=True,
+            download_name=filename,
+        )
+    return jsonify({"error": "Fixed document not found"}), 404
 
 
 if __name__ == "__main__":

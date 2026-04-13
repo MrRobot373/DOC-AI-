@@ -1,18 +1,24 @@
 """
-Review Engine Module
-Takes parsed document data and uses Ollama Cloud API to perform
-comprehensive document review across all check categories.
+Review Engine Module — Commercial Grade v2.0
+Multi-pass LLM review + Local Automated Checks for engineering documents.
+Detects 14 error pattern categories based on real TICO reviewer feedback.
 """
 
 import os
+import gc
 import json
 import re
+import math
 import difflib
+import hashlib
 from datetime import datetime
+from collections import Counter, defaultdict
 from ollama import Client
 
 
-# All review check categories
+# ============================================================
+# REVIEW CATEGORIES (expanded from 12 → 16 based on real TICO reviews)
+# ============================================================
 REVIEW_CATEGORIES = {
     "GRAMMAR_SPELLING": {
         "name": "Grammar & Spelling",
@@ -74,6 +80,27 @@ REVIEW_CATEGORIES = {
         "icon": "🔍",
         "description": "Debugger/oscilloscope values not readable, insufficient resolution",
     },
+    # --- NEW CATEGORIES from real TICO reviews ---
+    "DECIMAL_CONSISTENCY": {
+        "name": "Decimal Digit Consistency",
+        "icon": "🔢",
+        "description": "Inconsistent number of decimal places within table columns or value groups",
+    },
+    "TABLE_QUALITY": {
+        "name": "Table Quality",
+        "icon": "📊",
+        "description": "Duplicate tables, missing legends, unclear column headers, broken table formatting",
+    },
+    "SUBSCRIPT_FORMATTING": {
+        "name": "Subscript/Superscript Errors",
+        "icon": "⬇️",
+        "description": "Broken subscripts (<sub> tags in text), caret (^) instead of superscript, formatting artifacts",
+    },
+    "DATASHEET_COPY_ERROR": {
+        "name": "Datasheet Copy Error",
+        "icon": "📋",
+        "description": "Orphan references from datasheet copy-paste, incomplete notes, wrong figure/equation numbers from datasheets",
+    },
 }
 
 SEVERITY_LEVELS = {
@@ -83,6 +110,9 @@ SEVERITY_LEVELS = {
 }
 
 
+# ============================================================
+# OLLAMA CLIENT
+# ============================================================
 def create_ollama_client(api_key, host="https://ollama.com"):
     """Create an Ollama client with cloud API authentication."""
     client = Client(
@@ -158,11 +188,21 @@ def test_connection(api_key, host="https://ollama.com"):
         return {"success": False, "error": str(e)}
 
 
+# ============================================================
+# MAIN REVIEW ORCHESTRATOR
+# ============================================================
 def review_document(client, model, parsed_doc, progress_callback=None, review_mode="pro", vision_model=None):
     """
-    Perform a comprehensive review of a parsed document.
+    Perform comprehensive multi-pass review of a parsed document.
     Uses 'model' for text/table review and 'vision_model' for image review.
-    If vision_model is not provided, falls back to 'model' for images.
+
+    Review Pipeline:
+      1. Local Automated Checks (100% consistent, no LLM)
+      2. Pass A — Text Quality (grammar, spelling, terminology per chunk)
+      3. Pass B — Technical Accuracy (units, calculations, orphan refs per chunk)
+      4. Table-specific deep review
+      5. Full-document consistency check
+      6. Image review with vision model
     """
     findings = []
     text_model = model
@@ -175,39 +215,45 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         active_categories = list(REVIEW_CATEGORIES.keys())
 
     try:
-        # Step 1: Local checks (no LLM needed)
+        # ── STEP 1: Local Automated Checks (no LLM, 100% consistent) ──
         if progress_callback:
-            progress_callback("Running local formatting checks...")
+            progress_callback("Running automated quality checks...", 8)
         
-        # Only run local formatting/font checks in Pro mode
         if review_mode == "pro":
             local_findings = _run_local_checks(parsed_doc)
             if local_findings:
                 findings.extend(local_findings)
+            if progress_callback:
+                progress_callback(f"Found {len(local_findings)} issues from automated checks. Starting AI analysis...", 12)
 
-        # Step 2: LLM-powered review of document content in chunks
+        # ── STEP 2: LLM-powered multi-pass review ──
         from doc_parser import get_document_summary, get_section_chunks
 
         doc_summary = get_document_summary(parsed_doc)
         chunks = get_section_chunks(parsed_doc, max_chars=5000)
         total_chunks = len(chunks)
 
+        # Pass A — Text Quality + Technical combined (per chunk)
         for i, chunk in enumerate(chunks):
+            pct = 15 + int((i / max(total_chunks, 1)) * 50)  # 15% → 65%
             if progress_callback:
-                progress_callback(f"Analyzing section {i + 1}/{total_chunks} with AI...")
+                progress_callback(f"AI Pass: Analyzing chunk {i + 1}/{total_chunks}...", pct)
 
             try:
-                chunk_findings = _review_chunk_with_llm(client, text_model, chunk, doc_summary, i + 1, active_categories)
+                chunk_findings = _review_chunk_multipass(client, text_model, chunk, doc_summary, i + 1, active_categories)
                 if chunk_findings:
                     findings.extend(chunk_findings)
             except Exception as e:
-                pass
+                print(f"Error in chunk {i+1}: {e}")
+            
+            # Free memory periodically
+            if i % 5 == 0:
+                gc.collect()
 
-        # Step 3: Full-document cross-reference and consistency check
+        # ── STEP 3: Full-document cross-reference and consistency check ──
         if progress_callback:
-            progress_callback("Checking cross-document consistency...")
+            progress_callback("Checking cross-document consistency & terminology...", 68)
         
-        # In Normal mode, skip full consistency check
         if review_mode == "pro":
             try:
                 consistency_findings = _review_consistency_with_llm(client, text_model, doc_summary)
@@ -223,10 +269,10 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                     "source": "llm_error"
                 })
 
-        # Step 4: Table-specific review
+        # ── STEP 4: Table-specific review (LLM) ──
         if parsed_doc.get("tables"):
             if progress_callback:
-                progress_callback("Reviewing tables and data...")
+                progress_callback("Deep-reviewing tables and data...", 75)
             
             if review_mode == "pro":
                 try:
@@ -236,7 +282,6 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                 except Exception as e:
                     pass
             elif "UNITS_CALCULATIONS" in active_categories:
-                # Still check tables for units in normal mode
                 try:
                     table_findings = _review_tables_with_llm(client, text_model, parsed_doc, ["UNITS_CALCULATIONS"])
                     if table_findings:
@@ -244,11 +289,11 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                 except Exception as e:
                     pass
 
-        # Step 5: Image-specific review (use vision model)
+        # ── STEP 5: Image-specific review (use vision model) ──
         if parsed_doc.get("images") and any(m in img_model.lower() for m in ["vl", "vision", "llava", "qwen"]):
             total_images = min(len([i for i in parsed_doc["images"] if i.get("full_b64") and not i.get("is_small")]), 10)
             if progress_callback:
-                progress_callback(f"Reviewing {total_images} images/diagrams with {img_model}...", 89)
+                progress_callback(f"Reviewing {total_images} images/diagrams with {img_model}...", 82)
             
             if review_mode == "pro":
                 try:
@@ -270,19 +315,73 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         })
 
     # Deduplicate and sort findings safely
+    if progress_callback:
+        progress_callback("Deduplicating and finalizing findings...", 92)
+    
     if findings:
         findings = _deduplicate_findings(findings)
         findings.sort(key=lambda f: SEVERITY_LEVELS.get(f.get("severity", "MINOR"), {}).get("weight", 0), reverse=True)
 
-    # Number findings
+    # Number findings and assign fix_type
     for idx, f in enumerate(findings, 1):
         f["id"] = idx
+        if "fix_type" not in f:
+            f["fix_type"] = _classify_fix_type(f)
+        if "status" not in f:
+            f["status"] = "OPEN"
 
     return findings
 
 
+def _classify_fix_type(finding):
+    """Classify whether a finding can be auto-fixed or needs manual intervention."""
+    cat = finding.get("category", "")
+    comment = finding.get("comment", "").lower()
+    
+    # Auto-fixable: spelling errors, simple terminology swaps
+    if cat == "GRAMMAR_SPELLING":
+        # Only if the fix mentions a clear replacement
+        fix = finding.get("fix", "").lower()
+        if any(kw in fix for kw in ["change", "replace", "should be", "correct to"]):
+            return "AUTO"
+    
+    # Everything else is manual
+    return "MANUAL"
+
+
+# ============================================================
+# LOCAL AUTOMATED CHECKS (No LLM, 100% Consistent)
+# ============================================================
 def _run_local_checks(parsed_doc):
-    """Run checks that don't need LLM - formatting, fonts, spacing, images."""
+    """
+    Run all local checks that don't need LLM.
+    These produce identical results every run — 100% consistent.
+    """
+    findings = []
+    
+    # 1. Font & formatting checks (existing)
+    findings.extend(_check_font_consistency(parsed_doc))
+    
+    # 2. Decimal digit consistency in tables (NEW)
+    findings.extend(_check_decimal_consistency(parsed_doc))
+    
+    # 3. Cross-reference validation (NEW)
+    findings.extend(_check_cross_references(parsed_doc))
+    
+    # 4. Table duplication detection (NEW)
+    findings.extend(_check_table_duplication(parsed_doc))
+    
+    # 5. Subscript/formatting errors (NEW)
+    findings.extend(_check_subscript_errors(parsed_doc))
+    
+    # 6. Orphan datasheet references (NEW)
+    findings.extend(_check_orphan_references(parsed_doc))
+    
+    return findings
+
+
+def _check_font_consistency(parsed_doc):
+    """Check for font name and size inconsistencies."""
     findings = []
     fmt = parsed_doc.get("formatting", {})
 
@@ -307,6 +406,7 @@ def _run_local_checks(parsed_doc):
                     f"Consider unifying to one font family."
                 ),
                 "source": "local",
+                "fix_type": "MANUAL",
             })
 
     # Check for font size inconsistencies in body text
@@ -332,21 +432,402 @@ def _run_local_checks(parsed_doc):
                     f"{', '.join(str(s) + 'pt' for s in sorted(size_mismatches))}."
                 ),
                 "source": "local",
+                "fix_type": "MANUAL",
             })
 
+    return findings
 
-def _review_chunk_with_llm(client, model, chunk_text, doc_summary, chunk_num, active_categories):
-    """Send a document chunk to the LLM for comprehensive review."""
 
-    cat_list = "\n".join([f"{cid}. {REVIEW_CATEGORIES[cid]['name']}: {REVIEW_CATEGORIES[cid]['description']}" for cid in active_categories if cid in REVIEW_CATEGORIES])
+def _check_decimal_consistency(parsed_doc):
+    """
+    Check if decimal places are consistent within table columns.
+    Pattern 1 from real TICO reviews — VERY HIGH frequency.
+    """
+    findings = []
+    tables = parsed_doc.get("tables", [])
+    
+    number_pattern = re.compile(r'^-?\d+\.\d+$')
+    
+    for tbl in tables:
+        tbl_name = tbl.get("name", f"Table {tbl.get('index', 0) + 1}")
+        rows = tbl.get("rows", [])
+        if len(rows) < 3:  # Need at least header + 2 data rows
+            continue
+        
+        num_cols = tbl.get("num_cols", 0)
+        
+        for col_idx in range(num_cols):
+            decimal_counts = {}  # decimal_places -> list of values
+            for row_idx, row in enumerate(rows[1:], 1):  # Skip header
+                if col_idx >= len(row):
+                    continue
+                cell = row[col_idx].strip()
+                
+                # Extract numbers from cells
+                numbers_in_cell = number_pattern.findall(cell)
+                if not numbers_in_cell:
+                    # Try to find numbers with units like "3.3V" or "3.300 V"
+                    nums = re.findall(r'(-?\d+\.\d+)\s*[a-zA-Z°Ω%]*', cell)
+                    numbers_in_cell = nums
+                
+                for num_str in numbers_in_cell:
+                    if '.' in num_str:
+                        decimal_places = len(num_str.split('.')[-1])
+                        if decimal_places not in decimal_counts:
+                            decimal_counts[decimal_places] = []
+                        decimal_counts[decimal_places].append(f"Row {row_idx}: {cell[:40]}")
+            
+            # Flag if column has numbers with different decimal places
+            if len(decimal_counts) > 1 and sum(len(v) for v in decimal_counts.values()) >= 3:
+                # Find the most common decimal count
+                most_common = max(decimal_counts, key=lambda k: len(decimal_counts[k]))
+                problem_counts = {k: v for k, v in decimal_counts.items() if k != most_common}
+                
+                if problem_counts:
+                    problem_details = []
+                    for dc, examples in problem_counts.items():
+                        problem_details.append(f"{dc} decimal places ({len(examples)} values, e.g., {examples[0][:30]})")
+                    
+                    col_header = rows[0][col_idx].strip() if col_idx < len(rows[0]) else f"Column {col_idx+1}"
+                    findings.append({
+                        "category": "DECIMAL_CONSISTENCY",
+                        "severity": "MAJOR",
+                        "page": "-",
+                        "section": tbl_name,
+                        "comment": (
+                            f"Inconsistent decimal places in column '{col_header}'. "
+                            f"Most values use {most_common} decimal places, but found: "
+                            f"{'; '.join(problem_details)}. "
+                            f"All values in this column should use {most_common} decimal places."
+                        ),
+                        "fix": f"Standardize all values in column '{col_header}' to {most_common} decimal places.",
+                        "source": "local",
+                        "fix_type": "MANUAL",
+                    })
+    
+    return findings
 
-    prompt = f"""You are a senior technical document reviewer for automotive/embedded systems engineering documents.
-Review the following section of a technical document and find ALL issues. Pay close attention to every detail in the text.
 
-IMPORTANT: You must check for ONLY the categories listed below.
-NOTE: If you find dummy text, placeholder text, or nonsensical strings (e.g., 'xzccccxc', 'PCBDddduiouioDriver'), you MUST flag them as errors, as they indicate incomplete or erroneous documentation.
+def _check_cross_references(parsed_doc):
+    """
+    Verify that Figure X, Table X, Equation X, Section X references point to actual items.
+    Pattern 2 from real TICO reviews — VERY HIGH frequency.
+    """
+    findings = []
+    raw_text = parsed_doc.get("raw_text", "")
+    
+    # Build index of actual figures/tables/sections
+    actual_figures = set()
+    actual_tables = set()
+    actual_equations = set()
+    actual_sections = set()
+    
+    # From sections headings
+    for section in parsed_doc.get("sections", []):
+        heading = section.get("heading", "")
+        # Check for figure mentions in headings
+        fig_match = re.findall(r'Figure\s+(\d+[-.]?\d*)', heading, re.IGNORECASE)
+        actual_figures.update(fig_match)
+        
+        tbl_match = re.findall(r'Table\s+(\d+[-.]?\d*)', heading, re.IGNORECASE)
+        actual_tables.update(tbl_match)
+        
+        eq_match = re.findall(r'Equation\s+(\d+[-.]?\d*)', heading, re.IGNORECASE)
+        actual_equations.update(eq_match)
+        
+        # Track section numbers
+        sec_match = re.match(r'^(\d+(?:\.\d+)*)', heading.strip())
+        if sec_match:
+            actual_sections.add(sec_match.group(1))
+    
+    # From table names
+    for tbl in parsed_doc.get("tables", []):
+        tbl_name = tbl.get("name", "")
+        num_match = re.findall(r'Table\s+(\d+[-.]?\d*)', tbl_name, re.IGNORECASE)
+        actual_tables.update(num_match)
+    
+    # Also scan body text for figure/table captions
+    for section in parsed_doc.get("sections", []):
+        for para in section.get("paragraphs", []):
+            text = para.get("text", "")
+            # Look for definition patterns like "Figure 5: ..." or "Figure 5 —"
+            fig_defs = re.findall(r'Figure\s+(\d+[-.]?\d*)\s*[:\-—]', text, re.IGNORECASE)
+            actual_figures.update(fig_defs)
+            
+            tbl_defs = re.findall(r'Table\s+(\d+[-.]?\d*)\s*[:\-—]', text, re.IGNORECASE)
+            actual_tables.update(tbl_defs)
+            
+            eq_defs = re.findall(r'Equation\s+(\d+[-.]?\d*)\s*[:\-—]', text, re.IGNORECASE)
+            actual_equations.update(eq_defs)
+    
+    # Now scan for all references in body text
+    ref_pattern = re.compile(r'(?:see\s+|refer\s+to\s+|in\s+|from\s+)?(Figure|Table|Equation|Section)\s+(\d+[-.]?\d*)', re.IGNORECASE)
+    
+    issues_found = defaultdict(list)
+    
+    for section in parsed_doc.get("sections", []):
+        section_name = section.get("heading", "Unknown")
+        for para in section.get("paragraphs", []):
+            text = para.get("text", "")
+            page = str(para.get("page", "-"))
+            
+            for match in ref_pattern.finditer(text):
+                ref_type = match.group(1).capitalize()
+                ref_num = match.group(2)
+                
+                # Skip if it's a definition/caption itself
+                context = text[max(0, match.start()-5):match.end()+10]
+                if re.search(r'[:\-—]', context[len(match.group(0)):]):
+                    continue
+                
+                is_valid = False
+                if ref_type == "Figure":
+                    is_valid = ref_num in actual_figures
+                elif ref_type == "Table":
+                    is_valid = ref_num in actual_tables
+                elif ref_type == "Equation":
+                    is_valid = ref_num in actual_equations
+                elif ref_type == "Section":
+                    is_valid = ref_num in actual_sections
+                
+                if not is_valid:
+                    key = f"{ref_type} {ref_num}"
+                    if key not in issues_found:
+                        issues_found[key] = {
+                            "page": page,
+                            "section": section_name,
+                            "ref_type": ref_type,
+                            "ref_num": ref_num,
+                        }
+    
+    for key, info in issues_found.items():
+        findings.append({
+            "category": "CROSS_REFERENCE_ACCURACY",
+            "severity": "MAJOR",
+            "page": info["page"],
+            "section": info["section"],
+            "comment": (
+                f"Broken reference: '{key}' is referenced but does not appear to exist in this document. "
+                f"It may be a wrong number, or the referenced item is missing."
+            ),
+            "fix": f"Verify that {key} exists. If it doesn't, correct the reference to the right number or add the missing item.",
+            "source": "local",
+            "fix_type": "MANUAL",
+        })
+    
+    return findings
 
-## Review Categories:
+
+def _check_table_duplication(parsed_doc):
+    """
+    Detect near-identical tables that may have been copy-pasted.  
+    Pattern 8 from real TICO reviews.
+    """
+    findings = []
+    tables = parsed_doc.get("tables", [])
+    
+    if len(tables) < 2:
+        return findings
+    
+    # Compute a content hash for each table
+    table_hashes = []
+    for tbl in tables:
+        rows = tbl.get("rows", [])
+        # Hash the first 50 rows of content
+        content = "||".join(
+            "|".join(cell.strip().lower() for cell in row)
+            for row in rows[:50]
+        )
+        h = hashlib.md5(content.encode()).hexdigest()
+        table_hashes.append({
+            "hash": h,
+            "content": content,
+            "name": tbl.get("name", f"Table {tbl.get('index', 0) + 1}"),
+            "num_rows": tbl.get("num_rows", 0),
+        })
+    
+    # Compare pairwise
+    seen_pairs = set()
+    for i in range(len(table_hashes)):
+        for j in range(i + 1, len(table_hashes)):
+            pair_key = (min(i, j), max(i, j))
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+            
+            ti = table_hashes[i]
+            tj = table_hashes[j]
+            
+            # Exact match
+            if ti["hash"] == tj["hash"] and ti["content"]:
+                findings.append({
+                    "category": "TABLE_QUALITY",
+                    "severity": "MAJOR",
+                    "page": "-",
+                    "section": f"{ti['name']} / {tj['name']}",
+                    "comment": f"Tables '{ti['name']}' and '{tj['name']}' appear to be exact duplicates ({ti['num_rows']} rows each). This may be a copy-paste error.",
+                    "fix": "Remove the duplicate table or differentiate their content.",
+                    "source": "local",
+                    "fix_type": "MANUAL",
+                })
+            elif ti["content"] and tj["content"] and len(ti["content"]) > 50:
+                # Check similarity
+                ratio = difflib.SequenceMatcher(None, ti["content"][:500], tj["content"][:500]).ratio()
+                if ratio > 0.85:
+                    findings.append({
+                        "category": "TABLE_QUALITY",
+                        "severity": "MINOR",
+                        "page": "-",
+                        "section": f"{ti['name']} / {tj['name']}",
+                        "comment": f"Tables '{ti['name']}' and '{tj['name']}' are {ratio*100:.0f}% similar. This may be an unintended duplication from the datasheet.",
+                        "fix": "Review both tables and remove or merge if they contain essentially the same data.",
+                        "source": "local",
+                        "fix_type": "MANUAL",
+                    })
+    
+    return findings
+
+
+def _check_subscript_errors(parsed_doc):
+    """
+    Detect broken subscripts, HTML tags in text, caret notation in variable names.
+    Pattern 4 from real TICO reviews.
+    """
+    findings = []
+    
+    # Patterns to detect
+    html_tag_pattern = re.compile(r'</?(?:sub|sup|b|i|em|strong)>', re.IGNORECASE)
+    caret_pattern = re.compile(r'[A-Z]+\w*\^[\-\d\w]+')  # e.g., VOUT^-0.879
+    
+    for section in parsed_doc.get("sections", []):
+        section_name = section.get("heading", "Unknown")
+        for para in section.get("paragraphs", []):
+            text = para.get("text", "")
+            page = str(para.get("page", "-"))
+            
+            # Check for HTML tags in text (copy-paste artifact)
+            html_matches = html_tag_pattern.findall(text)
+            if html_matches:
+                findings.append({
+                    "category": "SUBSCRIPT_FORMATTING",
+                    "severity": "MAJOR",
+                    "page": page,
+                    "section": section_name,
+                    "comment": f"HTML formatting tags found in text: {', '.join(set(html_matches))}. This indicates broken subscript/superscript from copy-paste. Text: '{text[:80]}...'",
+                    "fix": "Convert HTML tags to proper Word subscript/superscript formatting (select text → Format → Font → Subscript/Superscript).",
+                    "source": "local",
+                    "fix_type": "MANUAL",
+                })
+            
+            # Check for caret notation
+            caret_matches = caret_pattern.findall(text)
+            if caret_matches:
+                for cm in caret_matches[:3]:  # Limit reports
+                    findings.append({
+                        "category": "SUBSCRIPT_FORMATTING",
+                        "severity": "MINOR",
+                        "page": page,
+                        "section": section_name,
+                        "comment": f"Caret notation '{cm}' found. Use proper superscript formatting instead of '^'. ",
+                        "fix": f"Replace '{cm}' with proper superscript formatting (select the exponent, Format → Font → Superscript).",
+                        "source": "local",
+                        "fix_type": "MANUAL",
+                    })
+    
+    return findings
+
+
+def _check_orphan_references(parsed_doc):
+    """
+    Detect orphan references from datasheet copy-paste.
+    Pattern 5 from real TICO reviews — references like "(1)", "(Note 3)", 
+    "See Figure 9-4" that are internal to a datasheet but not the document.
+    """
+    findings = []
+    
+    # Patterns for datasheet-internal references
+    note_ref = re.compile(r'\((?:Note|注)\s*\d+\)')  # (Note 1), (Note 3)
+    footnote_ref = re.compile(r'\(\d+\)\s*$')  # (1) at end of cell/line
+    datasheet_fig = re.compile(r'(?:See\s+)?Figure\s+\d+-\d+', re.IGNORECASE)  # Figure 9-4 (datasheet style)
+    
+    for section in parsed_doc.get("sections", []):
+        section_name = section.get("heading", "Unknown")
+        for para in section.get("paragraphs", []):
+            text = para.get("text", "")
+            page = str(para.get("page", "-"))
+            
+            # Check for datasheet note references
+            note_matches = note_ref.findall(text)
+            for nm in note_matches:
+                findings.append({
+                    "category": "DATASHEET_COPY_ERROR",
+                    "severity": "MAJOR",
+                    "page": page,
+                    "section": section_name,
+                    "comment": f"Orphan datasheet reference '{nm}' found. This note reference likely came from a component datasheet and does not exist in this document.",
+                    "fix": f"Remove the orphan reference '{nm}' or add the corresponding note to this document.",
+                    "source": "local",
+                    "fix_type": "MANUAL",
+                })
+            
+            # Check for datasheet-style figure references (Figure X-Y format)
+            ds_fig_matches = datasheet_fig.findall(text)
+            for dfm in ds_fig_matches:
+                findings.append({
+                    "category": "DATASHEET_COPY_ERROR",
+                    "severity": "MAJOR",
+                    "page": page,
+                    "section": section_name,
+                    "comment": f"Datasheet-style reference '{dfm}' found. This figure reference uses datasheet numbering (X-Y format) and likely does not exist in this document.",
+                    "fix": f"Remove '{dfm}' or replace with the correct figure reference from this document.",
+                    "source": "local",
+                    "fix_type": "MANUAL",
+                })
+    
+    return findings
+
+
+# ============================================================
+# LLM-POWERED REVIEW FUNCTIONS
+# ============================================================
+def _review_chunk_multipass(client, model, chunk_text, doc_summary, chunk_num, active_categories):
+    """
+    Enhanced chunk review with focused, detailed prompt.
+    Combines text quality + technical accuracy in one focused pass per chunk.
+    """
+    cat_list = "\n".join([
+        f"- {cid}: {REVIEW_CATEGORIES[cid]['name']} — {REVIEW_CATEGORIES[cid]['description']}" 
+        for cid in active_categories if cid in REVIEW_CATEGORIES
+    ])
+
+    prompt = f"""You are an expert senior technical document reviewer for automotive/embedded systems engineering.
+You are reviewing a Hardware Design Document (HDD), WCCA report, or SCTM for a commercial product.
+
+Your job is to find EVERY real issue. You must be thorough but precise — only flag genuine problems.
+
+## MANDATORY CHECKS (check ALL of these):
+
+### Text Quality:
+- Spelling errors, grammar mistakes, awkward sentences
+- Terminology used inconsistently (e.g., "Max Ratings" vs "Maximum Ratings" vs "Absolute Maximum Ratings")
+- Abbreviations/acronyms not defined on first use
+- Date format inconsistency (e.g., "13-Jun-2025" vs "10-Jul-25")
+- Placeholder text, dummy text, nonsensical strings
+
+### Technical Accuracy:
+- Values without proper units
+- Calculation errors or suspicious values
+- Missing subscript/superscript in variable names (COUT instead of C_OUT)
+- Component references (resistors, capacitors, ICs) that seem inconsistent
+- Orphan references copied from datasheets (e.g., "(Note 1)", "See Figure 9-4") that don't exist in this document
+- Missing explanations for suddenly-appearing values or calculations
+
+### Cross-References & Structure:
+- Figure/Table/Equation references that point to non-existent items
+- Section headings that are inconsistent in format
+- Incomplete sentences or thoughts
+
+## Review Categories to use:
 {cat_list}
 
 ## Document Context:
@@ -355,31 +836,32 @@ NOTE: If you find dummy text, placeholder text, or nonsensical strings (e.g., 'x
 ## Section to Review (Chunk {chunk_num}):
 {chunk_text}
 
+## Output Rules:
+1. Use the [Page X] markers from the text to determine the page number
+2. Include the EXACT problematic text in quotes in your comment
+3. Be specific — don't say "there might be an issue", say exactly what's wrong
+4. For each finding, also include a "fix_type" field: "AUTO" if it's a simple text replacement (spelling), "MANUAL" for everything else
+
 ## Output Format:
-Return a JSON array of findings. IMPORTANT: Use the (Starts on Page X) or --- [Page X] --- markers from the text to accurately determine and return the "page" number for each finding.
-Each finding must be:
+Return ONLY a JSON array. Each finding:
 {{
   "category": "CATEGORY_ID",
   "severity": "CRITICAL|MAJOR|MINOR",
-  "page": "Exact page number (e.g., '14') based on the text markers",
-  "section": "section reference",
-  "comment": "description of the error/issue",
-  "fix": "step-by-step instruction on how to fix this specific error"
+  "page": "page number from markers",
+  "section": "section heading or reference",
+  "comment": "Exact quote + description of error",
+  "fix": "Step-by-step fix instruction",
+  "fix_type": "AUTO|MANUAL"
 }}
 
-Return ONLY the JSON array, no other text. If no issues found, return [].
-Example:
-[
-  {{"category": "GRAMMAR_SPELLING", "severity": "MINOR", "page": "12", "section": "3.1", "comment": "Typo: 'recieve' should be 'receive'", "fix": "Change 'recieve' to 'receive'"}},
-  {{"category": "UNITS_CALCULATIONS", "severity": "MAJOR", "page": "15", "section": "4.2", "comment": "Missing unit for voltage value '3.3' - should specify '3.3V' or '3.3 VDC'", "fix": "Add 'V' or 'VDC' after '3.3'"}}
-]
+If no issues found, return [].
 """
 
     try:
         response = client.chat(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.1, "num_predict": 4096},
+            options={"temperature": 0.05, "num_predict": 4096},
         )
 
         reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
@@ -396,21 +878,24 @@ Example:
 
 
 def _review_consistency_with_llm(client, model, doc_summary):
-    """Check cross-document consistency issues."""
+    """Check cross-document consistency issues with enhanced prompts."""
 
     prompt = f"""You are a senior technical document reviewer. Analyze the overall structure and consistency of this document.
 
 ## Full Document Summary:
 {doc_summary[:8000]}
 
-## Focus Areas:
-1. Cross-reference accuracy (do figure/table/section references point to correct items?)
-2. Terminology consistency across the entire document
-4. Overall logical flow and completeness
-6. Consistent use of abbreviations/shortforms (are they defined on first use?)
-7. Consistent formatting patterns across similar sections
+## You MUST check for ALL of the following:
 
-NOTE: If you find dummy text, placeholder text, or nonsensical strings, flag them as errors. Do not ignore them.
+1. **Cross-reference accuracy**: Do figure/table/section references point to correct items?
+2. **Terminology consistency**: Is the same thing called different names in different sections? (e.g., "VDD" vs "VCC" for the same rail, "Max Ratings" vs "Maximum Ratings")
+3. **Expression consistency**: Are numbers, pin lists, ranges expressed the same way? (e.g., "pins 8-18" vs "pins 8, 9, 10, ...")
+4. **Date format consistency**: Are dates in the same format throughout? (e.g., "13-Jun-2025" vs "10-Jul-25")
+5. **Chapter naming consistency**: Do all chapters follow the same naming pattern? (e.g., some include part numbers but others don't)
+6. **Abbreviation definitions**: Are abbreviations defined on first use?
+7. **Key component coverage**: Are components mentioned in text also listed in component tables/BOM?
+8. **Logical flow**: Does each technical section have a clear premise → calculation → conclusion?
+9. **Placeholder/dummy text**: Any nonsensical strings or incomplete content?
 
 ## Output Format:
 Return a JSON array of findings. Each finding must be:
@@ -419,9 +904,12 @@ Return a JSON array of findings. Each finding must be:
   "severity": "CRITICAL|MAJOR|MINOR",
   "page": "page number or 'ALL'",
   "section": "section reference or 'ALL'",
-  "comment": "description of the inconsistency",
-  "fix": "how to resolve the contradiction"
+  "comment": "description of the inconsistency with specific examples",
+  "fix": "how to resolve the issue",
+  "fix_type": "MANUAL"
 }}
+
+Use these categories: TERMINOLOGY_CONSISTENCY, CROSS_REFERENCE_ACCURACY, LOGICAL_CONSISTENCY, FORMATTING_ALIGNMENT, SIGNAL_VARIABLE_NAMING, DATASHEET_COPY_ERROR
 
 Return ONLY the JSON array. If no issues, return [].
 """
@@ -430,7 +918,7 @@ Return ONLY the JSON array. If no issues, return [].
         response = client.chat(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.1, "num_predict": 4096},
+            options={"temperature": 0.05, "num_predict": 4096},
         )
 
         reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
@@ -454,46 +942,51 @@ Return ONLY the JSON array. If no issues, return [].
 
 
 def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
-    """Specifically review tables for completeness and formatting."""
+    """Enhanced table review — checks decimal consistency, units, completeness."""
     if not parsed_doc["tables"]:
         return []
     
     if not active_categories:
-        active_categories = ["UNITS_CALCULATIONS", "TEST_RESULT_COMPLETENESS", "MEASUREMENT_RESOLUTION", "FORMATTING_ALIGNMENT"]
+        active_categories = ["UNITS_CALCULATIONS", "TEST_RESULT_COMPLETENESS", "MEASUREMENT_RESOLUTION", 
+                            "FORMATTING_ALIGNMENT", "DECIMAL_CONSISTENCY", "TABLE_QUALITY"]
 
     tables_text = []
     for tbl in parsed_doc["tables"][:15]:  # Limit to first 15 tables
         tbl_name = tbl.get("name", f"Table {tbl['index'] + 1}")
         rows_str = "\n".join(
             f"  Row {i}: {' | '.join(c[:150] for c in row)}"
-            for i, row in enumerate(tbl["rows"][:100]) # Increased to 100 rows
+            for i, row in enumerate(tbl["rows"][:100])
         )
         tables_text.append(f"--- {tbl_name} ({tbl['num_rows']}×{tbl['num_cols']}) ---\n{rows_str}")
 
-    prompt = f"""You are reviewing TABLES in a technical document. Check each table for:
-1. Missing headers or unclear column names
-2. Empty cells that should have values
-3. Inconsistent units across rows
-4. Test results without pass/fail criteria, actual measurements, or judgments
-5. Numerical values without units
-6. Calculation errors or suspicious values
-7. Consistent formatting across rows
-8. Dummy text, placeholder text, or nonsensical strings (flag these as errors).
+    prompt = f"""You are reviewing TABLES in an engineering technical document (HDD/WCCA/SCTM). Check EVERY table for:
 
-IMPORTANT: Do NOT report errors stating that a table is "incomplete" or "truncated". Assume data may legitimately continue on another page.
+1. **Decimal place consistency**: Within each column, do all numerical values have the same number of decimal places? (e.g., mixing "3.3" and "3.300" is an error)
+2. **Missing headers or unclear column names**
+3. **Empty cells that should have values**
+4. **Inconsistent units across rows** (e.g., some cells say "V" and others say "VDC")
+5. **Test results without pass/fail criteria, actual measurements, or judgments**
+6. **Numerical values without units**
+7. **Suspicious values** (e.g., a voltage column has a value of "100" among "3.3", "5.0", "12.0")
+8. **Missing legends** — if a table uses symbols or abbreviations, is there a legend?
+9. **Min/Typ/Max values in wrong columns** compared to datasheet
+10. **Placeholder text or dummy data**
+
+IMPORTANT: Do NOT report that a table is "incomplete" or "truncated" — data may continue on another page.
 
 ## Tables:
 {chr(10).join(tables_text)}
 
 ## Output Format:
-Return a JSON array of findings. Each finding must be:
+Return a JSON array. Each finding:
 {{
   "category": "CATEGORY_ID",
   "severity": "CRITICAL|MAJOR|MINOR",
   "page": "-",
-  "section": "Exact Table Name (from the --- Name --- marker)",
-  "comment": "detailed description",
-  "fix": "step-by-step instruction on how to fix this specific error"
+  "section": "Exact Table Name",
+  "comment": "detailed description with specific cell/row references",
+  "fix": "step-by-step fix instruction",
+  "fix_type": "MANUAL"
 }}
 
 Return ONLY the JSON array. If no issues, return [].
@@ -503,7 +996,7 @@ Return ONLY the JSON array. If no issues, return [].
         response = client.chat(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.1, "num_predict": 4096},
+            options={"temperature": 0.05, "num_predict": 4096},
         )
         reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
         return _parse_llm_findings(reply, "llm_tables")
@@ -543,7 +1036,7 @@ def _review_images_with_llm(client, model, parsed_doc, doc_summary="", progress_
     
     for idx, img in enumerate(reviewable_images):
         if progress_callback:
-            pct = 89 + int((idx / max(total_images, 1)) * 6)  # 89% → 95%
+            pct = 82 + int((idx / max(total_images, 1)) * 10)  # 82% → 92%
             progress_callback(f"Analyzing image {idx + 1}/{total_images} with vision AI...", pct)
         
         prompt = f"""You are reviewing a DIAGRAM / GRAPH / IMAGE in a technical engineering document.
@@ -578,7 +1071,8 @@ Return a JSON array of findings. Each finding must be:
   "page": "-",
   "section": "Image / Diagram",
   "comment": "detailed description of issue found",
-  "fix": "step-by-step instruction on how to fix this"
+  "fix": "step-by-step instruction on how to fix this",
+  "fix_type": "MANUAL"
 }}
 
 IMPORTANT: Use severity CRITICAL if image data contradicts the document text. Use MAJOR for missing labels. Use MINOR for formatting issues.
@@ -593,7 +1087,7 @@ Return ONLY the JSON array. If no issues, return [].
                     "content": prompt,
                     "images": [img["full_b64"]]
                 }],
-                options={"temperature": 0.1, "num_predict": 2048},
+                options={"temperature": 0.05, "num_predict": 2048},
             )
             reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
             
@@ -616,6 +1110,9 @@ Return ONLY the JSON array. If no issues, return [].
     return findings
 
 
+# ============================================================
+# FINDING PARSERS
+# ============================================================
 def _parse_llm_findings(llm_response, source="llm"):
     """Parse LLM response into structured findings."""
     # Log raw output for debugging
@@ -662,6 +1159,7 @@ def _parse_llm_findings(llm_response, source="llm"):
                         "section": str(f.get("section", "-")),
                         "comment": str(f.get("comment", "")),
                         "fix": str(f.get("fix", "Review content for accuracy.")),
+                        "fix_type": str(f.get("fix_type", "MANUAL")),
                         "source": source,
                     })
                 return valid_findings
@@ -694,6 +1192,7 @@ def _parse_llm_findings(llm_response, source="llm"):
                         "section": str(f.get("section", "-")),
                         "comment": str(f.get("comment", "")),
                         "fix": str(f.get("fix", "Review content for accuracy.")),
+                        "fix_type": str(f.get("fix_type", "MANUAL")),
                         "source": source + "_regex",
                     })
             except Exception:
@@ -710,9 +1209,8 @@ def _deduplicate_findings(findings):
     for f in findings:
         is_duplicate = False
         for u in unique:
-            # If category is the same, and they are either in the same section or same page, check similarity
+            # If category is the same, check comment similarity
             if f.get('category') == u.get('category'):
-                # Check comment similarity (70% match is considered a duplicate)
                 ratio = difflib.SequenceMatcher(None, f.get('comment', '').lower(), u.get('comment', '').lower()).ratio()
                 if ratio > 0.7:
                     is_duplicate = True

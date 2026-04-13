@@ -8,7 +8,8 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import {
     LogOut, Settings, UploadCloud, CheckCircle2, AlertTriangle,
-    FileText, X, ChevronDown, ExternalLink, MessageSquare, HelpCircle, Send
+    FileText, X, ChevronDown, ExternalLink, MessageSquare, HelpCircle, Send,
+    Check, XCircle, Clock, Download, Zap
 } from "lucide-react"
 
 interface DashboardProps {
@@ -59,6 +60,13 @@ export default function Dashboard({ user }: DashboardProps) {
     const [reportUrl, setReportUrl] = useState<string | null>(null)
     const [findings, setFindings] = useState<any[]>([])
     const [fileType, setFileType] = useState<'doc' | 'excel'>('doc')
+    const [reviewId, setReviewId] = useState<string | null>(null)
+
+    // Finding management state
+    const [statusFilter, setStatusFilter] = useState<string>("ALL")
+    const [applyingFixes, setApplyingFixes] = useState(false)
+    const [fixedDocUrl, setFixedDocUrl] = useState<string | null>(null)
+    const [updatingFindingId, setUpdatingFindingId] = useState<number | null>(null)
 
     const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -198,6 +206,7 @@ export default function Dashboard({ user }: DashboardProps) {
                         setProgressPct(100)
                         setFindings(sData.findings || [])
                         setReportUrl(`${API_BASE_URL}/api/download/${sData.report_filename}`)
+                        setReviewId(reviewId)
                         setReviewing(false)
 
                         supabase.from('review_history').insert({
@@ -218,6 +227,59 @@ export default function Dashboard({ user }: DashboardProps) {
             setReviewing(false)
         }
     }
+
+    // ── Finding management handlers ──
+    const handleUpdateFinding = async (findingId: number, newStatus: string) => {
+        if (!reviewId) return
+        setUpdatingFindingId(findingId)
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/update-finding/${reviewId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ finding_id: findingId, status: newStatus })
+            })
+            const data = await resp.json()
+            if (data.success) {
+                setFindings(prev => prev.map(f => 
+                    f.id === findingId ? { ...f, status: newStatus } : f
+                ))
+            }
+        } catch (e) {
+            console.error('Failed to update finding:', e)
+        } finally {
+            setUpdatingFindingId(null)
+        }
+    }
+
+    const handleApplyFixes = async () => {
+        if (!reviewId) return
+        setApplyingFixes(true)
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/apply-fixes/${reviewId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            })
+            const data = await resp.json()
+            if (data.success && data.fixed_filename) {
+                setFixedDocUrl(`${API_BASE_URL}/api/download-fixed/${data.fixed_filename}`)
+                alert(`✅ Auto-fix applied! ${data.changes_applied} changes made, ${data.changes_skipped} skipped.`)
+            } else {
+                alert(data.error || data.message || 'No auto-fixable findings.')
+            }
+        } catch (e: any) {
+            alert('Error: ' + e.message)
+        } finally {
+            setApplyingFixes(false)
+        }
+    }
+
+    // Computed stats
+    const resolvedCount = findings.filter(f => f.status === 'CLOSED' || f.status === 'IGNORE' || f.status === 'N/A').length
+    const autoFixableCount = findings.filter(f => f.fix_type === 'AUTO' && f.status === 'OPEN').length
+    const filteredFindings = statusFilter === 'ALL' 
+        ? findings 
+        : findings.filter(f => f.status === statusFilter)
 
     // Get user initials
     const initials = user.email
@@ -696,25 +758,183 @@ export default function Dashboard({ user }: DashboardProps) {
                 {/* Findings */}
                 {findings.length > 0 && (
                     <div className="w-full mt-10 space-y-4">
-                        <div className="flex items-center justify-between">
-                            <h3 className="text-lg font-semibold text-white">Review Findings</h3>
-                            <span className="text-xs text-gray-500 bg-white/5 px-3 py-1 rounded-full">{findings.length} issues found</span>
+                        {/* Summary Bar */}
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-4">
+                                <h3 className="text-lg font-semibold text-white">Review Findings</h3>
+                                <span className="text-xs text-gray-500 bg-white/5 px-3 py-1 rounded-full">
+                                    {resolvedCount}/{findings.length} resolved
+                                </span>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                                {/* Status Filters */}
+                                {['ALL', 'OPEN', 'WORKING', 'CLOSED', 'IGNORE'].map(status => (
+                                    <button
+                                        key={status}
+                                        onClick={() => setStatusFilter(status)}
+                                        className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                                            statusFilter === status
+                                                ? status === 'ALL' ? 'bg-white/10 text-white border border-white/20'
+                                                : status === 'OPEN' ? 'bg-red-500/15 text-red-400 border border-red-500/30'
+                                                : status === 'WORKING' ? 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/30'
+                                                : status === 'CLOSED' ? 'bg-green-500/15 text-green-400 border border-green-500/30'
+                                                : 'bg-gray-500/15 text-gray-400 border border-gray-500/30'
+                                                : 'text-gray-600 hover:text-gray-400'
+                                        }`}
+                                    >
+                                        {status === 'ALL' ? `All (${findings.length})` 
+                                            : `${status.charAt(0) + status.slice(1).toLowerCase()} (${findings.filter(f => f.status === status).length})`}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
-                        <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
-                            {findings.map((f, i) => (
-                                <div key={i} className="bg-white/[0.02] border border-white/5 rounded-xl p-4 flex gap-4 text-sm hover:border-white/10 transition-colors">
-                                    <div className="min-w-fit pt-0.5">
-                                        {f.severity === 'CRITICAL' && <span className="px-2.5 py-1 bg-red-500/15 text-red-400 rounded-md text-xs font-medium">Critical</span>}
-                                        {f.severity === 'MAJOR' && <span className="px-2.5 py-1 bg-orange-500/15 text-orange-400 rounded-md text-xs font-medium">Major</span>}
-                                        {f.severity === 'MINOR' && <span className="px-2.5 py-1 bg-yellow-500/15 text-yellow-400 rounded-md text-xs font-medium">Minor</span>}
-                                    </div>
-                                    <div className="space-y-1 w-full">
-                                        <div className="flex items-center justify-between text-gray-500 text-xs">
-                                            <span>{f.category?.replace(/_/g, " ")} &bull; Page {f.page}</span>
-                                            <span className="truncate max-w-[200px]">{f.section}</span>
+
+                        {/* Batch Actions */}
+                        <div className="flex items-center gap-3">
+                            {autoFixableCount > 0 && (
+                                <Button
+                                    onClick={handleApplyFixes}
+                                    disabled={applyingFixes}
+                                    className="bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/20 h-9 text-xs gap-2"
+                                    variant="ghost"
+                                >
+                                    <Zap className="h-3.5 w-3.5" />
+                                    {applyingFixes ? 'Applying...' : `Auto-Fix ${autoFixableCount} Issues`}
+                                </Button>
+                            )}
+                            {fixedDocUrl && (
+                                <Button asChild variant="outline" className="border-emerald-500/20 bg-transparent text-emerald-400 hover:bg-emerald-500/10 h-9 text-xs gap-2">
+                                    <a href={fixedDocUrl} download>
+                                        <Download className="h-3.5 w-3.5" />
+                                        Download Fixed Document
+                                    </a>
+                                </Button>
+                            )}
+                        </div>
+
+                        {/* Findings List */}
+                        <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                            {filteredFindings.map((f, i) => (
+                                <div
+                                    key={f.id || i}
+                                    className={`border rounded-xl p-4 text-sm transition-all ${
+                                        f.status === 'CLOSED' ? 'bg-green-500/[0.03] border-green-500/10 opacity-60'
+                                        : f.status === 'IGNORE' || f.status === 'N/A' ? 'bg-white/[0.01] border-white/5 opacity-40'
+                                        : f.status === 'WORKING' ? 'bg-yellow-500/[0.03] border-yellow-500/10'
+                                        : 'bg-white/[0.02] border-white/5 hover:border-white/10'
+                                    }`}
+                                >
+                                    <div className="flex gap-4">
+                                        {/* Severity Badge */}
+                                        <div className="min-w-fit pt-0.5 flex flex-col items-center gap-2">
+                                            {f.severity === 'CRITICAL' && <span className="px-2.5 py-1 bg-red-500/15 text-red-400 rounded-md text-xs font-medium">Critical</span>}
+                                            {f.severity === 'MAJOR' && <span className="px-2.5 py-1 bg-orange-500/15 text-orange-400 rounded-md text-xs font-medium">Major</span>}
+                                            {f.severity === 'MINOR' && <span className="px-2.5 py-1 bg-yellow-500/15 text-yellow-400 rounded-md text-xs font-medium">Minor</span>}
+                                            {/* Fix Type Badge */}
+                                            {f.fix_type === 'AUTO' && (
+                                                <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 rounded text-[10px] font-medium flex items-center gap-1">
+                                                    <Zap className="h-2.5 w-2.5" />Auto
+                                                </span>
+                                            )}
                                         </div>
-                                        <p className="text-gray-200 leading-relaxed">{f.comment}</p>
+
+                                        {/* Content */}
+                                        <div className="space-y-2 flex-1 min-w-0">
+                                            <div className="flex items-center justify-between text-gray-500 text-xs">
+                                                <span>{f.category?.replace(/_/g, ' ')} &bull; Page {f.page}</span>
+                                                <span className="truncate max-w-[200px]">{f.section}</span>
+                                            </div>
+                                            <p className="text-gray-200 leading-relaxed">{f.comment}</p>
+                                            {/* Fix instruction */}
+                                            {f.fix && (
+                                                <div className="bg-white/[0.03] border border-white/5 rounded-lg px-3 py-2 text-xs text-gray-400">
+                                                    <span className="text-gray-500 font-medium">Fix: </span>{f.fix}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Action Buttons */}
+                                        <div className="flex flex-col gap-1.5 min-w-fit">
+                                            {f.status === 'OPEN' && (
+                                                <>
+                                                    <button
+                                                        onClick={() => handleUpdateFinding(f.id, 'CLOSED')}
+                                                        disabled={updatingFindingId === f.id}
+                                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20 text-xs font-medium transition-all"
+                                                        title="Accept (mark as resolved)"
+                                                    >
+                                                        <Check className="h-3 w-3" />Accept
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleUpdateFinding(f.id, 'IGNORE')}
+                                                        disabled={updatingFindingId === f.id}
+                                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 text-xs font-medium transition-all"
+                                                        title="Reject (not a real issue)"
+                                                    >
+                                                        <XCircle className="h-3 w-3" />Reject
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleUpdateFinding(f.id, 'WORKING')}
+                                                        disabled={updatingFindingId === f.id}
+                                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 text-xs font-medium transition-all"
+                                                        title="Mark as in-progress"
+                                                    >
+                                                        <Clock className="h-3 w-3" />Working
+                                                    </button>
+                                                </>
+                                            )}
+                                            {f.status === 'CLOSED' && (
+                                                <button
+                                                    onClick={() => handleUpdateFinding(f.id, 'OPEN')}
+                                                    disabled={updatingFindingId === f.id}
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 text-gray-400 hover:bg-white/10 text-xs font-medium transition-all"
+                                                >
+                                                    Reopen
+                                                </button>
+                                            )}
+                                            {f.status === 'IGNORE' && (
+                                                <button
+                                                    onClick={() => handleUpdateFinding(f.id, 'OPEN')}
+                                                    disabled={updatingFindingId === f.id}
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 text-gray-400 hover:bg-white/10 text-xs font-medium transition-all"
+                                                >
+                                                    Reopen
+                                                </button>
+                                            )}
+                                            {f.status === 'WORKING' && (
+                                                <>
+                                                    <button
+                                                        onClick={() => handleUpdateFinding(f.id, 'CLOSED')}
+                                                        disabled={updatingFindingId === f.id}
+                                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20 text-xs font-medium transition-all"
+                                                    >
+                                                        <Check className="h-3 w-3" />Done
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleUpdateFinding(f.id, 'OPEN')}
+                                                        disabled={updatingFindingId === f.id}
+                                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 text-gray-400 hover:bg-white/10 text-xs font-medium transition-all"
+                                                    >
+                                                        Reopen
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
                                     </div>
+
+                                    {/* Status indicator at bottom */}
+                                    {f.status !== 'OPEN' && (
+                                        <div className={`mt-3 pt-2 border-t text-xs font-medium flex items-center gap-1.5 ${
+                                            f.status === 'CLOSED' ? 'border-green-500/10 text-green-500'
+                                            : f.status === 'WORKING' ? 'border-yellow-500/10 text-yellow-500'
+                                            : 'border-white/5 text-gray-600'
+                                        }`}>
+                                            {f.status === 'CLOSED' && <><Check className="h-3 w-3" />Accepted / Resolved</>}
+                                            {f.status === 'WORKING' && <><Clock className="h-3 w-3" />In Progress</>}
+                                            {f.status === 'IGNORE' && <><XCircle className="h-3 w-3" />Rejected / Not Applicable</>}
+                                            {f.status === 'N/A' && <><XCircle className="h-3 w-3" />N/A</>}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
