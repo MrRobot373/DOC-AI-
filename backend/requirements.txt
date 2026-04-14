@@ -1,0 +1,12 @@
+flask
+flask-cors
+python-docx
+openpyxl
+requests
+ollama
+Pillow
+gunicorn
+nltk
+supabase
+huey
+redis

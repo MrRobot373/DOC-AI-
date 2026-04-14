@@ -7,6 +7,7 @@ echo Starting task queue consumer...
 echo This window must stay open to process reviews.
 echo.
 
-huey_consumer.py app.huey_queue
+cd backend
+huey_consumer app.huey_queue
 
 pause

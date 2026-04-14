@@ -3,7 +3,7 @@ services:
     name: doc-ai-backend
     env: python
     buildCommand: "./build.sh"
-    startCommand: "gunicorn -c gunicorn.conf.py app:app"
+    startCommand: "cd backend && gunicorn -c ../gunicorn.conf.py app:app"
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0

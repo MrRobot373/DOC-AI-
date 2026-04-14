@@ -1,0 +1,1313 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TICO Document Review Tool</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a1a;
+            --bg-secondary: #12122a;
+            --bg-card: rgba(20, 20, 50, 0.6);
+            --bg-card-hover: rgba(30, 30, 70, 0.8);
+            --border-color: rgba(100, 100, 255, 0.12);
+            --border-glow: rgba(100, 140, 255, 0.3);
+            --text-primary: #e8e8f0;
+            --text-secondary: #8888aa;
+            --text-muted: #5555777;
+            --accent-blue: #4488ff;
+            --accent-purple: #7744ff;
+            --accent-gradient: linear-gradient(135deg, #4488ff, #7744ff);
+            --critical: #ff4466;
+            --major: #ff8844;
+            --minor: #ffcc44;
+            --suggestion: #44aaff;
+            --success: #44dd88;
+            --radius: 16px;
+            --radius-sm: 10px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Background effects */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(ellipse at 30% 20%, rgba(68, 136, 255, 0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 70% 80%, rgba(119, 68, 255, 0.05) 0%, transparent 50%);
+            z-index: 0;
+            animation: bgFloat 20s ease-in-out infinite;
+        }
+
+        @keyframes bgFloat {
+
+            0%,
+            100% {
+                transform: translate(0, 0) rotate(0deg);
+            }
+
+            50% {
+                transform: translate(-2%, 2%) rotate(1deg);
+            }
+        }
+
+        /* Header */
+        .header {
+            position: relative;
+            z-index: 10;
+            padding: 28px 40px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-color);
+            backdrop-filter: blur(20px);
+            background: rgba(10, 10, 26, 0.8);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .logo-icon {
+            width: 44px;
+            height: 44px;
+            background: var(--accent-gradient);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            box-shadow: 0 4px 20px rgba(68, 136, 255, 0.3);
+        }
+
+        .logo h1 {
+            font-size: 22px;
+            font-weight: 700;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .logo p {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        .header-badge {
+            padding: 6px 16px;
+            background: rgba(68, 136, 255, 0.1);
+            border: 1px solid rgba(68, 136, 255, 0.2);
+            border-radius: 20px;
+            font-size: 12px;
+            color: var(--accent-blue);
+            font-weight: 500;
+        }
+
+        /* Main Layout */
+        .main {
+            position: relative;
+            z-index: 5;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 32px 40px 60px;
+        }
+
+        /* Steps */
+        .steps {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 32px;
+        }
+
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 18px;
+            border-radius: 24px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+
+        .step.active {
+            color: var(--text-primary);
+            background: rgba(68, 136, 255, 0.12);
+            border-color: rgba(68, 136, 255, 0.3);
+            box-shadow: 0 0 20px rgba(68, 136, 255, 0.1);
+        }
+
+        .step.done {
+            color: var(--success);
+            border-color: rgba(68, 221, 136, 0.3);
+            background: rgba(68, 221, 136, 0.08);
+        }
+
+        .step-num {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .step.active .step-num {
+            background: var(--accent-blue);
+            color: #fff;
+        }
+
+        .step.done .step-num {
+            background: var(--success);
+            color: #fff;
+        }
+
+        .step-arrow {
+            color: var(--text-muted);
+            font-size: 16px;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 32px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+            margin-bottom: 24px;
+        }
+
+        .card:hover {
+            border-color: var(--border-glow);
+            box-shadow: 0 8px 40px rgba(68, 136, 255, 0.06);
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card-subtitle {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 24px;
+        }
+
+        /* Form Elements */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            outline: none;
+        }
+
+        .form-input:focus {
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(68, 136, 255, 0.15);
+        }
+
+        .form-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        select.form-input {
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M6 8L1 3h10z' fill='%238888aa'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 14px center;
+            padding-right: 36px;
+        }
+
+        select.form-input option {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px 24px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            text-decoration: none;
+        }
+
+        .btn-primary {
+            background: var(--accent-gradient);
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(68, 136, 255, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 25px rgba(68, 136, 255, 0.4);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--border-glow);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #44dd88, #22aa66);
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(68, 221, 136, 0.3);
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 25px rgba(68, 221, 136, 0.4);
+        }
+
+        /* Upload Zone */
+        .upload-zone {
+            border: 2px dashed var(--border-color);
+            border-radius: var(--radius);
+            padding: 48px 32px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .upload-zone:hover,
+        .upload-zone.dragover {
+            border-color: var(--accent-blue);
+            background: rgba(68, 136, 255, 0.05);
+        }
+
+        .upload-zone.has-file {
+            border-color: var(--success);
+            background: rgba(68, 221, 136, 0.05);
+            border-style: solid;
+        }
+
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .upload-text {
+            font-size: 15px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .upload-text strong {
+            color: var(--accent-blue);
+        }
+
+        .upload-hint {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .file-info {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 12px;
+        }
+
+        .file-name {
+            font-weight: 600;
+            color: var(--success);
+        }
+
+        .file-size {
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        .file-remove {
+            color: var(--critical);
+            cursor: pointer;
+            font-size: 18px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+
+        .file-remove:hover {
+            background: rgba(255, 68, 102, 0.1);
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        /* Connection Status */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.success {
+            background: rgba(68, 221, 136, 0.12);
+            color: var(--success);
+            border: 1px solid rgba(68, 221, 136, 0.2);
+        }
+
+        .status-badge.error {
+            background: rgba(255, 68, 102, 0.12);
+            color: var(--critical);
+            border: 1px solid rgba(255, 68, 102, 0.2);
+        }
+
+        .status-badge.loading {
+            background: rgba(68, 136, 255, 0.12);
+            color: var(--accent-blue);
+            border: 1px solid rgba(68, 136, 255, 0.2);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-badge.success .status-dot {
+            background: var(--success);
+        }
+
+        .status-badge.error .status-dot {
+            background: var(--critical);
+        }
+
+        .status-badge.loading .status-dot {
+            background: var(--accent-blue);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.3;
+            }
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            display: none;
+            margin-top: 24px;
+        }
+
+        .progress-container.visible {
+            display: block;
+        }
+
+        .progress-bar-bg {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--accent-gradient);
+            border-radius: 4px;
+            transition: width 0.5s ease;
+            width: 0%;
+            box-shadow: 0 0 10px rgba(68, 136, 255, 0.4);
+        }
+
+        .progress-text {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        /* Results */
+        .results-container {
+            display: none;
+        }
+
+        .results-container.visible {
+            display: block;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 14px;
+            margin-bottom: 28px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 18px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--border-glow);
+        }
+
+        .stat-number {
+            font-size: 32px;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+
+        .stat-number.critical {
+            color: var(--critical);
+        }
+
+        .stat-number.major {
+            color: var(--major);
+        }
+
+        .stat-number.minor {
+            color: var(--minor);
+        }
+
+        .stat-number.suggestion {
+            color: var(--suggestion);
+        }
+
+        .stat-number.total {
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Category Filter Tabs */
+        .filter-tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .filter-tab {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border-color);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            transition: all 0.2s ease;
+        }
+
+        .filter-tab:hover {
+            border-color: var(--border-glow);
+            color: var(--text-primary);
+        }
+
+        .filter-tab.active {
+            background: rgba(68, 136, 255, 0.15);
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+        }
+
+        .filter-tab .count {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.08);
+            padding: 1px 7px;
+            border-radius: 10px;
+            margin-left: 4px;
+            font-size: 11px;
+        }
+
+        /* Findings List */
+        .finding-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 18px 20px;
+            margin-bottom: 10px;
+            transition: all 0.2s ease;
+            display: flex;
+            gap: 16px;
+        }
+
+        .finding-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: var(--border-glow);
+        }
+
+        .finding-num {
+            min-width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .finding-item[data-severity="CRITICAL"] .finding-num {
+            background: rgba(255, 68, 102, 0.15);
+            color: var(--critical);
+        }
+
+        .finding-item[data-severity="MAJOR"] .finding-num {
+            background: rgba(255, 136, 68, 0.15);
+            color: var(--major);
+        }
+
+        .finding-item[data-severity="MINOR"] .finding-num {
+            background: rgba(255, 204, 68, 0.15);
+            color: var(--minor);
+        }
+
+        .finding-item[data-severity="SUGGESTION"] .finding-num {
+            background: rgba(68, 170, 255, 0.15);
+            color: var(--suggestion);
+        }
+
+        .finding-content {
+            flex: 1;
+        }
+
+        .finding-meta {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+
+        .finding-badge {
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .finding-badge.severity-CRITICAL {
+            background: rgba(255, 68, 102, 0.15);
+            color: var(--critical);
+        }
+
+        .finding-badge.severity-MAJOR {
+            background: rgba(255, 136, 68, 0.15);
+            color: var(--major);
+        }
+
+        .finding-badge.severity-MINOR {
+            background: rgba(255, 204, 68, 0.15);
+            color: var(--minor);
+        }
+
+        .finding-badge.severity-SUGGESTION {
+            background: rgba(68, 170, 255, 0.15);
+            color: var(--suggestion);
+        }
+
+        .finding-badge.category-badge {
+            background: rgba(119, 68, 255, 0.12);
+            color: var(--accent-purple);
+        }
+
+        .finding-badge.section-badge {
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-secondary);
+        }
+
+        .finding-comment {
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-primary);
+        }
+
+        /* Hidden */
+        .hidden {
+            display: none !important;
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-in {
+            animation: fadeIn 0.4s ease forwards;
+        }
+
+        /* Spinner */
+        .spinner {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            border: 2px solid transparent;
+            border-top: 2px solid currentColor;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header {
+                padding: 20px;
+            }
+
+            .main {
+                padding: 20px;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        /* Action bar */
+        .action-bar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        /* Document info mini */
+        .doc-info-bar {
+            display: flex;
+            gap: 20px;
+            padding: 16px 20px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: var(--radius-sm);
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .doc-info-item {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .doc-info-item strong {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">📋</div>
+            <div>
+                <h1>TICO Document Review</h1>
+                <p>AI-Powered Technical Document Reviewer</p>
+            </div>
+        </div>
+        <div class="header-badge">Ollama Cloud · 15 Check Categories</div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+
+        <!-- Step Indicators -->
+        <div class="steps">
+            <div class="step active" id="step1">
+                <div class="step-num">1</div>
+                Connect
+            </div>
+            <span class="step-arrow">→</span>
+            <div class="step" id="step2">
+                <div class="step-num">2</div>
+                Upload
+            </div>
+            <span class="step-arrow">→</span>
+            <div class="step" id="step3">
+                <div class="step-num">3</div>
+                Review
+            </div>
+            <span class="step-arrow">→</span>
+            <div class="step" id="step4">
+                <div class="step-num">4</div>
+                Report
+            </div>
+        </div>
+
+        <!-- Step 1: API Configuration -->
+        <div class="card" id="configCard">
+            <div class="card-title">🔑 Ollama Cloud API Configuration</div>
+            <div class="card-subtitle">Enter your Ollama Cloud API key and select a model to begin</div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">API Key</label>
+                    <input type="password" class="form-input" id="apiKey" placeholder="Enter your Ollama Cloud API key">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Host URL</label>
+                    <input type="text" class="form-input" id="hostUrl" value="https://ollama.com"
+                        placeholder="https://ollama.com">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Model</label>
+                <div style="display: flex; gap: 10px;">
+                    <select class="form-input" id="modelSelect" disabled style="flex:1">
+                        <option value="">-- Connect first to load models --</option>
+                    </select>
+                    <input type="text" class="form-input" id="modelManual"
+                        placeholder="Or type model name (e.g. gpt-oss:120b-cloud)" style="flex:1">
+                </div>
+            </div>
+
+            <div class="action-bar">
+                <button class="btn btn-secondary" id="testBtn" onclick="testConnection()">
+                    Test Connection
+                </button>
+                <div id="connectionStatus"></div>
+            </div>
+        </div>
+
+        <!-- Step 2: Document Upload -->
+        <div class="card" id="uploadCard">
+            <div class="card-title">📄 Upload Document</div>
+            <div class="card-subtitle">Upload a Word document (.docx) for comprehensive review</div>
+
+            <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+                <div class="upload-icon">📤</div>
+                <div class="upload-text">
+                    <strong>Click to upload</strong> or drag and drop
+                </div>
+                <div class="upload-hint">Supports .docx files (Software Design Documents, Test Reports)</div>
+            </div>
+
+            <div class="file-info hidden" id="fileInfo">
+                <span>📄</span>
+                <span class="file-name" id="fileName"></span>
+                <span class="file-size" id="fileSize"></span>
+                <span class="file-remove" onclick="removeFile()" title="Remove file">✕</span>
+            </div>
+
+            <input type="file" id="fileInput" accept=".docx,.doc" onchange="handleFileSelect(event)">
+
+            <div style="margin-top: 20px;">
+                <button class="btn btn-primary" id="reviewBtn" disabled onclick="startReview()">
+                    🚀 Start AI Review
+                </button>
+            </div>
+
+            <!-- Progress -->
+            <div class="progress-container" id="progressContainer">
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-text">
+                    <span id="progressMsg">Preparing...</span>
+                    <span id="progressPct">0%</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3 & 4: Results -->
+        <div class="results-container" id="resultsContainer">
+
+            <!-- Document Info -->
+            <div class="doc-info-bar" id="docInfoBar"></div>
+
+            <!-- Stats -->
+            <div class="stats-grid" id="statsGrid"></div>
+
+            <!-- Download Button -->
+            <div class="card">
+                <div class="action-bar">
+                    <button class="btn btn-success" id="downloadBtn" onclick="downloadReport()">
+                        📥 Download Excel Report
+                    </button>
+                    <button class="btn btn-secondary" onclick="resetTool()">
+                        🔄 Review Another Document
+                    </button>
+                </div>
+            </div>
+
+            <!-- Category Filters -->
+            <div class="card">
+                <div class="card-title">🔍 Review Findings</div>
+                <div class="card-subtitle" id="findingsSubtitle"></div>
+
+                <div class="filter-tabs" id="filterTabs"></div>
+
+                <div id="findingsList"></div>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        // State
+        let selectedFile = null;
+        let currentFindings = [];
+        let reportFilename = '';
+        let activeFilter = 'ALL';
+
+        // --- Connection ---
+        async function testConnection() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const host = document.getElementById('hostUrl').value.trim();
+            const statusEl = document.getElementById('connectionStatus');
+            const testBtn = document.getElementById('testBtn');
+
+            if (!apiKey) {
+                statusEl.innerHTML = '<span class="status-badge error"><span class="status-dot"></span>API key is required</span>';
+                return;
+            }
+
+            testBtn.disabled = true;
+            testBtn.innerHTML = '<span class="spinner"></span> Testing...';
+            statusEl.innerHTML = '<span class="status-badge loading"><span class="status-dot"></span>Connecting...</span>';
+
+            try {
+                const resp = await fetch('/api/check-ollama', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: apiKey, host: host })
+                });
+                const data = await resp.json();
+
+                if (data.success) {
+                    statusEl.innerHTML = '<span class="status-badge success"><span class="status-dot"></span>Connected</span>';
+
+                    // Populate model dropdown
+                    const select = document.getElementById('modelSelect');
+                    select.innerHTML = '<option value="">-- Select a model --</option>';
+                    if (data.models && data.models.length > 0) {
+                        data.models.forEach(m => {
+                            const opt = document.createElement('option');
+                            opt.value = m;
+                            opt.textContent = m;
+                            select.appendChild(opt);
+                        });
+                        select.disabled = false;
+                    }
+
+                    updateStep(2);
+                } else {
+                    statusEl.innerHTML = `<span class="status-badge error"><span class="status-dot"></span>${data.error || 'Connection failed'}</span>`;
+                }
+            } catch (err) {
+                statusEl.innerHTML = `<span class="status-badge error"><span class="status-dot"></span>${err.message}</span>`;
+            }
+
+            testBtn.disabled = false;
+            testBtn.innerHTML = 'Test Connection';
+        }
+
+        // --- File Upload ---
+        const uploadZone = document.getElementById('uploadZone');
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('dragover');
+        });
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                setFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        function handleFileSelect(event) {
+            if (event.target.files.length > 0) {
+                setFile(event.target.files[0]);
+            }
+        }
+
+        function setFile(file) {
+            if (!file.name.toLowerCase().endsWith('.docx') && !file.name.toLowerCase().endsWith('.doc')) {
+                alert('Please upload a .docx file');
+                return;
+            }
+            selectedFile = file;
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileSize').textContent = formatSize(file.size);
+            document.getElementById('fileInfo').classList.remove('hidden');
+            uploadZone.classList.add('has-file');
+            uploadZone.querySelector('.upload-icon').textContent = '✅';
+            uploadZone.querySelector('.upload-text').innerHTML = '<strong>File ready</strong>';
+            document.getElementById('reviewBtn').disabled = false;
+        }
+
+        function removeFile() {
+            selectedFile = null;
+            document.getElementById('fileInfo').classList.add('hidden');
+            document.getElementById('fileInput').value = '';
+            uploadZone.classList.remove('has-file');
+            uploadZone.querySelector('.upload-icon').textContent = '📤';
+            uploadZone.querySelector('.upload-text').innerHTML = '<strong>Click to upload</strong> or drag and drop';
+            document.getElementById('reviewBtn').disabled = true;
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        }
+
+        // --- Review ---
+        async function startReview() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const host = document.getElementById('hostUrl').value.trim();
+            const modelSelect = document.getElementById('modelSelect').value;
+            const modelManual = document.getElementById('modelManual').value.trim();
+            const model = modelManual || modelSelect;
+
+            if (!apiKey) { alert('Please enter your API key first'); return; }
+            if (!model) { alert('Please select or type a model name'); return; }
+            if (!selectedFile) { alert('Please upload a document'); return; }
+
+            // Show progress UI
+            const reviewBtn = document.getElementById('reviewBtn');
+            reviewBtn.disabled = true;
+            reviewBtn.innerHTML = '<span class="spinner"></span> Reviewing...';
+
+            const progressContainer = document.getElementById('progressContainer');
+            progressContainer.classList.add('visible');
+            updateProgress(5, 'Uploading document...');
+            updateStep(3);
+
+            // Build form data
+            const formData = new FormData();
+            formData.append('api_key', apiKey);
+            formData.append('host', host);
+            formData.append('model', model);
+            formData.append('document', selectedFile);
+
+            try {
+                // Start the review process (backend thread)
+                const resp = await fetch('/api/review', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const data = await resp.json();
+
+                if (!data.success) {
+                    updateProgress(0, `Error: ${data.error}`);
+                    reviewBtn.disabled = false;
+                    reviewBtn.innerHTML = '🚀 Start AI Review';
+                    return;
+                }
+
+                const reviewId = data.review_id;
+
+                // Poll for progress every 2 seconds
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const statusResp = await fetch(`/api/progress/${reviewId}`);
+                        const statusData = await statusResp.json();
+
+                        if (statusData.status === 'error') {
+                            clearInterval(pollInterval);
+                            updateProgress(0, `Error: ${statusData.message}`);
+                            reviewBtn.disabled = false;
+                            reviewBtn.innerHTML = '🚀 Start AI Review';
+                        }
+                        else if (statusData.status === 'done') {
+                            clearInterval(pollInterval);
+                            updateProgress(100, 'Review complete!');
+
+                            currentFindings = statusData.findings;
+                            reportFilename = statusData.report_filename;
+
+                            setTimeout(() => {
+                                progressContainer.classList.remove('visible');
+                                showResults(statusData);
+                                updateStep(4);
+                            }, 800);
+                        }
+                        else {
+                            // Still running, update progress bar
+                            updateProgress(statusData.progress || 5, statusData.message || 'Processing...');
+                        }
+                    } catch (pollErr) {
+                        console.error("Polling error:", pollErr);
+                    }
+                }, 2000);
+
+            } catch (err) {
+                updateProgress(0, `Error: ${err.message}`);
+                reviewBtn.disabled = false;
+                reviewBtn.innerHTML = '🚀 Start AI Review';
+            }
+        }
+
+        function updateProgress(pct, msg) {
+            document.getElementById('progressFill').style.width = pct + '%';
+            document.getElementById('progressPct').textContent = Math.round(pct) + '%';
+            document.getElementById('progressMsg').textContent = msg;
+        }
+
+        // --- Results Display ---
+        function showResults(data) {
+            const container = document.getElementById('resultsContainer');
+            container.classList.add('visible');
+            container.classList.add('animate-in');
+
+            // Document info
+            const info = data.document_info;
+            document.getElementById('docInfoBar').innerHTML = `
+            <div class="doc-info-item"><strong>📄 ${info.filename}</strong></div>
+            <div class="doc-info-item">Words: <strong>${info.words.toLocaleString()}</strong></div>
+            <div class="doc-info-item">Sections: <strong>${info.sections}</strong></div>
+            <div class="doc-info-item">Tables: <strong>${info.tables}</strong></div>
+            <div class="doc-info-item">Images: <strong>${info.images}</strong></div>
+        `;
+
+            // Stats
+            const sev = data.summary.severity_counts;
+            document.getElementById('statsGrid').innerHTML = `
+            <div class="stat-card">
+                <div class="stat-number total">${data.summary.total_findings}</div>
+                <div class="stat-label">Total Issues</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number critical">${sev.CRITICAL || 0}</div>
+                <div class="stat-label">Critical</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number major">${sev.MAJOR || 0}</div>
+                <div class="stat-label">Major</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number minor">${sev.MINOR || 0}</div>
+                <div class="stat-label">Minor</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number suggestion">${sev.SUGGESTION || 0}</div>
+                <div class="stat-label">Suggestions</div>
+            </div>
+        `;
+
+            // Subtitle
+            document.getElementById('findingsSubtitle').textContent =
+                `${data.summary.total_findings} issues found across ${Object.keys(data.summary.category_counts).length} categories`;
+
+            // Filter tabs
+            const cats = data.summary.category_counts;
+            let tabsHTML = `<div class="filter-tab active" onclick="filterFindings('ALL')">All <span class="count">${data.summary.total_findings}</span></div>`;
+            // Sort categories by count
+            const sortedCats = Object.entries(cats).sort((a, b) => b[1].count - a[1].count);
+            for (const [catId, catInfo] of sortedCats) {
+                tabsHTML += `<div class="filter-tab" data-cat="${catId}" onclick="filterFindings('${catId}')">${catInfo.icon} ${catInfo.name} <span class="count">${catInfo.count}</span></div>`;
+            }
+            document.getElementById('filterTabs').innerHTML = tabsHTML;
+
+            // Render findings
+            renderFindings(data.findings, data.categories);
+        }
+
+        function renderFindings(findings, categories) {
+            const list = document.getElementById('findingsList');
+            let html = '';
+
+            for (const f of findings) {
+                if (activeFilter !== 'ALL' && f.category !== activeFilter) continue;
+
+                const catInfo = categories[f.category] || {};
+                html += `
+                <div class="finding-item" data-severity="${f.severity}" data-category="${f.category}">
+                    <div class="finding-num">${f.id}</div>
+                    <div class="finding-content">
+                        <div class="finding-meta">
+                            <span class="finding-badge severity-${f.severity}">${f.severity}</span>
+                            <span class="finding-badge category-badge">${catInfo.icon || ''} ${catInfo.name || f.category}</span>
+                            ${f.section !== '-' ? `<span class="finding-badge section-badge">§ ${f.section}</span>` : ''}
+                            ${f.page !== '-' ? `<span class="finding-badge section-badge">P${f.page}</span>` : ''}
+                        </div>
+                        <div class="finding-comment">${escapeHtml(f.comment)}</div>
+                    </div>
+                </div>
+            `;
+            }
+
+            list.innerHTML = html || '<div style="text-align:center; padding:40px; color:var(--text-secondary)">No findings in this category</div>';
+        }
+
+        function filterFindings(category) {
+            activeFilter = category;
+
+            // Update tab styles
+            document.querySelectorAll('.filter-tab').forEach(tab => {
+                tab.classList.remove('active');
+                if ((category === 'ALL' && !tab.dataset.cat) || tab.dataset.cat === category) {
+                    tab.classList.add('active');
+                }
+            });
+
+            // Re-render
+            const categories = {};
+            currentFindings.forEach(f => {
+                if (!categories[f.category]) categories[f.category] = { name: f.category, icon: '' };
+            });
+            renderFindings(currentFindings, categories);
+        }
+
+        function downloadReport() {
+            if (reportFilename) {
+                window.location.href = `/api/download/${reportFilename}`;
+            }
+        }
+
+        function resetTool() {
+            document.getElementById('resultsContainer').classList.remove('visible');
+            removeFile();
+            document.getElementById('reviewBtn').innerHTML = '🚀 Start AI Review';
+            currentFindings = [];
+            reportFilename = '';
+            updateStep(2);
+        }
+
+        // --- Step Management ---
+        function updateStep(num) {
+            for (let i = 1; i <= 4; i++) {
+                const el = document.getElementById('step' + i);
+                el.classList.remove('active', 'done');
+                if (i < num) el.classList.add('done');
+                else if (i === num) el.classList.add('active');
+            }
+        }
+
+        // --- Utilities ---
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+
+</body>
+
+</html>
