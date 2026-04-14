@@ -39,7 +39,7 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 # Cloud environments use threading (NOT Huey immediate mode which blocks the HTTP request)
 # Local environments use Huey with Redis or Sqlite for crash recovery
 IS_CLOUD_ENV = os.environ.get("RENDER") or os.environ.get("FLY_APP_NAME") or os.environ.get("HEROKU_APP_NAME") or os.environ.get("GCP_PROJECT")
-USE_THREADING = IS_CLOUD_ENV  # Threading allows progress polling to work
+USE_THREADING = True  # Set to True locally as well so no separate worker is needed!
 
 if not USE_THREADING:
     try:

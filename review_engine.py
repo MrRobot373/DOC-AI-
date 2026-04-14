@@ -101,6 +101,11 @@ REVIEW_CATEGORIES = {
         "icon": "📋",
         "description": "Orphan references from datasheet copy-paste, incomplete notes, wrong figure/equation numbers from datasheets",
     },
+    "TOC_VALIDATION": {
+        "name": "TOC & Heading Structure",
+        "icon": "📚",
+        "description": "Table of contents mismatches, broken section numbering, and heading hierarchy problems",
+    },
 }
 
 SEVERITY_LEVELS = {
@@ -219,12 +224,11 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         if progress_callback:
             progress_callback("Running automated quality checks...", 8)
         
-        if review_mode == "pro":
-            local_findings = _run_local_checks(parsed_doc)
-            if local_findings:
-                findings.extend(local_findings)
-            if progress_callback:
-                progress_callback(f"Found {len(local_findings)} issues from automated checks. Starting AI analysis...", 12)
+        local_findings = _run_local_checks(parsed_doc)
+        if local_findings:
+            findings.extend(local_findings)
+        if progress_callback:
+            progress_callback(f"Found {len(local_findings)} issues from automated checks. Starting AI analysis...", 12)
 
         # ── STEP 2: LLM-powered multi-pass review ──
         from doc_parser import get_document_summary, get_section_chunks
@@ -356,27 +360,55 @@ def _run_local_checks(parsed_doc):
     """
     Run all local checks that don't need LLM.
     These produce identical results every run — 100% consistent.
+    Note: TOC/heading checks are Word-only; Excel docs have no toc/headings so they skip silently.
     """
     findings = []
-    
-    # 1. Font & formatting checks (existing)
+
+    # 1. Font & formatting checks
     findings.extend(_check_font_consistency(parsed_doc))
-    
-    # 2. Decimal digit consistency in tables (NEW)
+
+    # 2. Decimal digit consistency in tables
     findings.extend(_check_decimal_consistency(parsed_doc))
-    
-    # 3. Cross-reference validation (NEW)
+
+    # 3. Cross-reference validation
     findings.extend(_check_cross_references(parsed_doc))
-    
-    # 4. Table duplication detection (NEW)
+
+    # 4. Table duplication detection
     findings.extend(_check_table_duplication(parsed_doc))
-    
-    # 5. Subscript/formatting errors (NEW)
+
+    # 5. Subscript/formatting errors
     findings.extend(_check_subscript_errors(parsed_doc))
-    
-    # 6. Orphan datasheet references (NEW)
+
+    # 6. Orphan datasheet references
     findings.extend(_check_orphan_references(parsed_doc))
-    
+
+    # 7. TOC ↔ Heading sync (Word-only)
+    findings.extend(_check_toc_heading_sync(parsed_doc))
+
+    # 8. Section number continuity (Word-only)
+    findings.extend(_check_section_number_continuity(parsed_doc))
+
+    # 9. Heading hierarchy enforcement (Word-only)
+    findings.extend(_check_heading_hierarchy(parsed_doc))
+
+    # 10. Spacing and tab errors
+    findings.extend(_check_spacing_errors(parsed_doc))
+
+    # 11. Repeated words
+    findings.extend(_check_repeated_words(parsed_doc))
+
+    # 12. Unmatched brackets
+    findings.extend(_check_unmatched_brackets(parsed_doc))
+
+    # 13. Empty paragraph pagination
+    findings.extend(_check_empty_paragraphs(parsed_doc))
+
+    # 14. Min/Typ/Max logic validator
+    findings.extend(_check_min_typ_max_tables(parsed_doc))
+
+    # 15. Engineering standard unit casing/spacing
+    findings.extend(_check_unit_standardization(parsed_doc))
+
     return findings
 
 
@@ -1218,3 +1250,304 @@ def _deduplicate_findings(findings):
         if not is_duplicate:
             unique.append(f)
     return unique
+
+
+# ============================================================
+# TOC & HEADING STRUCTURE CHECKS
+# ============================================================
+
+def _check_toc_heading_sync(parsed_doc):
+    """
+    Compare TOC entries against actual document headings.
+    Flags: stale TOC text, numbering mismatches, orphan TOC rows,
+    and headings missing from the TOC.
+
+    Fix (I1): uses max_toc_level so headings intentionally omitted from
+    the TOC (e.g. level-3 when TOC only goes to level-2) are not
+    falsely flagged as missing.
+
+    Fix (I2): uses id(candidate) instead of candidate["index"] so two
+    heading objects that happen to share a paragraph index are tracked
+    independently.
+    """
+    findings = []
+    toc_entries = [e for e in parsed_doc.get("toc", {}).get("entries", []) if e.get("text")]
+    headings = [h for h in parsed_doc.get("headings", []) if h.get("text")]
+
+    if not toc_entries or not headings:
+        return findings
+
+    # Only compare headings up to the deepest level present in the TOC.
+    # This prevents false "missing from TOC" findings for intentionally
+    # omitted deeper levels (e.g. Heading 3 when TOC only shows 2 levels).
+    max_toc_level = max((e.get("level") or 1 for e in toc_entries), default=1)
+    comparable_headings = [h for h in headings if (h.get("level") or 0) <= max_toc_level]
+    if not comparable_headings:
+        return findings
+
+    actual_by_number = defaultdict(list)
+    actual_by_title = defaultdict(list)
+    for heading in comparable_headings:
+        title_key = _normalize_toc_text(heading.get("title") or heading.get("text"))
+        if heading.get("number"):
+            actual_by_number[heading["number"]].append(heading)
+        actual_by_title[title_key].append(heading)
+
+    # Track which headings were matched using object identity (avoids index collisions)
+    matched_heading_ids = set()
+
+    for entry in toc_entries:
+        entry_text = entry.get("text", "")
+        entry_title = entry.get("title") or entry_text
+        entry_title_key = _normalize_toc_text(entry_title)
+        entry_number = entry.get("number")
+        entry_level = entry.get("level") or 1
+        candidate = None
+
+        if entry_number:
+            same_number = actual_by_number.get(entry_number, [])
+            exact_match = [
+                h for h in same_number
+                if _normalize_toc_text(h.get("title") or h.get("text")) == entry_title_key
+            ]
+            if exact_match:
+                candidate = exact_match[0]
+            elif same_number:
+                candidate = same_number[0]
+                findings.append({
+                    "category": "TOC_VALIDATION",
+                    "severity": "MAJOR",
+                    "page": str(entry.get("page", candidate.get("page", "-"))),
+                    "section": "Table of Contents",
+                    "comment": (
+                        f"TOC entry '{entry_text}' does not match the actual heading text "
+                        f"for section {entry_number}. The document heading reads '{candidate.get('text')}'."
+                    ),
+                    "fix": f"Update the TOC entry for section {entry_number} to match '{candidate.get('text')}'.",
+                    "source": "local",
+                    "fix_type": "MANUAL",
+                })
+            else:
+                same_title = actual_by_title.get(entry_title_key, [])
+                if same_title:
+                    candidate = same_title[0]
+                    findings.append({
+                        "category": "TOC_VALIDATION",
+                        "severity": "MAJOR",
+                        "page": str(entry.get("page", candidate.get("page", "-"))),
+                        "section": "Table of Contents",
+                        "comment": (
+                            f"TOC entry '{entry_text}' uses section number {entry_number}, "
+                            f"but the matching heading is numbered "
+                            f"'{candidate.get('number') or 'unnumbered'}'."
+                        ),
+                        "fix": f"Correct the TOC numbering for '{candidate.get('text')}'.",
+                        "source": "local",
+                        "fix_type": "MANUAL",
+                    })
+                else:
+                    findings.append({
+                        "category": "TOC_VALIDATION",
+                        "severity": "MAJOR",
+                        "page": str(entry.get("page", "-")),
+                        "section": "Table of Contents",
+                        "comment": (
+                            f"TOC entry '{entry_text}' does not map to any heading in the "
+                            f"document body. The TOC may be stale or contain an extra entry."
+                        ),
+                        "fix": f"Remove or update the TOC entry '{entry_text}' to match a real heading.",
+                        "source": "local",
+                        "fix_type": "MANUAL",
+                    })
+        else:
+            same_title = actual_by_title.get(entry_title_key, [])
+            if same_title:
+                candidate = same_title[0]
+            else:
+                findings.append({
+                    "category": "TOC_VALIDATION",
+                    "severity": "MAJOR",
+                    "page": str(entry.get("page", "-")),
+                    "section": "Table of Contents",
+                    "comment": f"TOC entry '{entry_text}' does not match any heading in the document body.",
+                    "fix": f"Update or remove the TOC entry '{entry_text}'.",
+                    "source": "local",
+                    "fix_type": "MANUAL",
+                })
+
+        if candidate:
+            matched_heading_ids.add(id(candidate))
+            if candidate.get("level") != entry_level:
+                findings.append({
+                    "category": "TOC_VALIDATION",
+                    "severity": "MINOR",
+                    "page": str(candidate.get("page", "-")),
+                    "section": "Table of Contents",
+                    "comment": (
+                        f"TOC nesting mismatch for '{candidate.get('text')}'. "
+                        f"TOC uses level {entry_level} but the actual heading is level {candidate.get('level')}."
+                    ),
+                    "fix": f"Adjust the TOC indent level for '{candidate.get('text')}' to match the heading hierarchy.",
+                    "source": "local",
+                    "fix_type": "MANUAL",
+                })
+
+    # Flag headings missing from the TOC
+    for heading in comparable_headings:
+        if id(heading) in matched_heading_ids:
+            continue
+        findings.append({
+            "category": "TOC_VALIDATION",
+            "severity": "MAJOR",
+            "page": str(heading.get("page", "-")),
+            "section": heading.get("text", "Unknown"),
+            "comment": f"Heading '{heading.get('text')}' appears in the document but is missing from the TOC.",
+            "fix": f"Refresh the TOC so it includes '{heading.get('text')}'.",
+            "source": "local",
+            "fix_type": "MANUAL",
+        })
+
+    return findings
+
+
+def _check_section_number_continuity(parsed_doc):
+    """
+    Verify numbered headings are sequential within each parent branch.
+    Flags gaps (1.1, 1.3 — missing 1.2) and duplicates (two sections both 2.2).
+    """
+    findings = []
+    numbered_headings = []
+
+    for heading in parsed_doc.get("headings", []):
+        number = heading.get("number")
+        if not number:
+            continue
+        try:
+            parts = tuple(int(p) for p in number.split("."))
+        except ValueError:
+            continue  # e.g. annex A.1, B.2 — skip non-integer numbering
+        numbered_headings.append({"heading": heading, "parts": parts})
+
+    siblings = defaultdict(list)
+    for item in numbered_headings:
+        parent = item["parts"][:-1]
+        siblings[parent].append(item)
+
+    for parent, items in siblings.items():
+        child_values = [item["parts"][-1] for item in items]
+
+        # Flag duplicates
+        duplicates = [v for v, cnt in Counter(child_values).items() if cnt > 1]
+        for dup_val in sorted(duplicates):
+            dup_items = [item for item in items if item["parts"][-1] == dup_val]
+            anchor = dup_items[1]["heading"]
+            dup_label = _format_section_number(parent + (dup_val,))
+            findings.append({
+                "category": "TOC_VALIDATION",
+                "severity": "MAJOR",
+                "page": str(anchor.get("page", "-")),
+                "section": anchor.get("text", "Unknown"),
+                "comment": f"Duplicate section number '{dup_label}' detected in the heading sequence.",
+                "fix": f"Rename one of the duplicate headings numbered '{dup_label}' so numbering is unique.",
+                "source": "local",
+                "fix_type": "MANUAL",
+            })
+
+        # Flag gaps in the sequence
+        unique_values = sorted(set(child_values))
+        for prev, curr in zip(unique_values, unique_values[1:]):
+            if curr - prev <= 1:
+                continue
+            missing = [_format_section_number(parent + (v,)) for v in range(prev + 1, curr)]
+            impacted = next(
+                (item["heading"] for item in items if item["parts"][-1] == curr),
+                items[-1]["heading"],
+            )
+            parent_label = _format_section_number(parent) or "top level"
+            findings.append({
+                "category": "TOC_VALIDATION",
+                "severity": "MAJOR",
+                "page": str(impacted.get("page", "-")),
+                "section": impacted.get("text", "Unknown"),
+                "comment": (
+                    f"Non-continuous section numbering under {parent_label}. "
+                    f"Missing section number(s): {', '.join(missing)}."
+                ),
+                "fix": f"Renumber headings under {parent_label} so the sequence is continuous.",
+                "source": "local",
+                "fix_type": "MANUAL",
+            })
+
+    return findings
+
+
+def _check_heading_hierarchy(parsed_doc):
+    """
+    Ensure no heading appears without its parent heading level or parent section number.
+    Flags orphan sub-sections such as a Heading 3 with no preceding Heading 2.
+
+    Fix (B3): uses elif so a heading only produces ONE orphan finding even when both
+    the style-level check and the numbered-parent check would fire.
+    """
+    findings = []
+    open_headings = {}
+    seen_numbered_sections = set()
+
+    headings = sorted(parsed_doc.get("headings", []), key=lambda h: h.get("index", 0))
+    for heading in headings:
+        level = heading.get("level")
+        number = heading.get("number")
+        text = heading.get("text", "Unknown")
+        if not level:
+            continue
+
+        # Trim open_headings to only ancestors of the current level
+        open_headings = {lvl: h for lvl, h in open_headings.items() if lvl < level}
+
+        missing_parent = False
+        reason = None
+
+        # Check 1: style-level orphan (Heading 3 with no Heading 2 above)
+        if level > 1 and (level - 1) not in open_headings:
+            missing_parent = True
+            reason = f"no preceding Heading {level - 1}"
+
+        # Check 2 (elif — only fires if check 1 didn't): numeric-parent orphan
+        elif number and "." in number:
+            parent_number = number.rsplit(".", 1)[0]
+            if parent_number not in seen_numbered_sections:
+                missing_parent = True
+                reason = f"parent section '{parent_number}' does not exist earlier in the document"
+
+        if missing_parent:
+            findings.append({
+                "category": "TOC_VALIDATION",
+                "severity": "MAJOR",
+                "page": str(heading.get("page", "-")),
+                "section": text,
+                "comment": f"Orphan heading '{text}' detected: {reason}.",
+                "fix": f"Add the missing parent heading before '{text}' or correct its heading level/numbering.",
+                "source": "local",
+                "fix_type": "MANUAL",
+            })
+
+        open_headings[level] = heading
+        if number:
+            seen_numbered_sections.add(number)
+
+    return findings
+
+
+def _normalize_toc_text(text):
+    """Normalise heading text for deterministic TOC comparisons (case-insensitive, whitespace-collapsed)."""
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def _format_section_number(parts):
+    """Format a section-number tuple back to a dotted label, e.g. (1, 2) → '1.2'."""
+    if not parts:
+        return ""
+    return ".".join(str(p) for p in parts)
+

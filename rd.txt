@@ -1,0 +1,140 @@
+def review_document(client, model, parsed_doc, progress_callback=None, review_mode="pro", vision_model=None):
+    """
+    Perform comprehensive multi-pass review of a parsed document.
+    Uses 'model' for text/table review and 'vision_model' for image review.
+
+    Review Pipeline:
+      1. Local Automated Checks (100% consistent, no LLM)
+      2. Pass A — Text Quality (grammar, spelling, terminology per chunk)
+      3. Pass B — Technical Accuracy (units, calculations, orphan refs per chunk)
+      4. Table-specific deep review
+      5. Full-document consistency check
+      6. Image review with vision model
+    """
+    findings = []
+    text_model = model
+    img_model = vision_model or model
+    
+    # Define which categories to use based on mode
+    if review_mode == "normal":
+        active_categories = ["GRAMMAR_SPELLING", "TERMINOLOGY_CONSISTENCY", "UNITS_CALCULATIONS"]
+    else:
+        active_categories = list(REVIEW_CATEGORIES.keys())
+
+    try:
+        # ── STEP 1: Local Automated Checks (no LLM, 100% consistent) ──
+        if progress_callback:
+            progress_callback("Running automated quality checks...", 8)
+        
+        if review_mode == "pro":
+            local_findings = _run_local_checks(parsed_doc)
+            if local_findings:
+                findings.extend(local_findings)
+            if progress_callback:
+                progress_callback(f"Found {len(local_findings)} issues from automated checks. Starting AI analysis...", 12)
+
+        # ── STEP 2: LLM-powered multi-pass review ──
+        from doc_parser import get_document_summary, get_section_chunks
+
+        doc_summary = get_document_summary(parsed_doc)
+        chunks = get_section_chunks(parsed_doc, max_chars=5000)
+        total_chunks = len(chunks)
+
+        # Pass A — Text Quality + Technical combined (per chunk)
+        for i, chunk in enumerate(chunks):
+            pct = 15 + int((i / max(total_chunks, 1)) * 50)  # 15% → 65%
+            if progress_callback:
+                progress_callback(f"AI Pass: Analyzing chunk {i + 1}/{total_chunks}...", pct)
+
+            try:
+                chunk_findings = _review_chunk_multipass(client, text_model, chunk, doc_summary, i + 1, active_categories)
+                if chunk_findings:
+                    findings.extend(chunk_findings)
+            except Exception as e:
+                print(f"Error in chunk {i+1}: {e}")
+            
+            # Free memory periodically
+            if i % 5 == 0:
+                gc.collect()
+
+        # ── STEP 3: Full-document cross-reference and consistency check ──
+        if progress_callback:
+            progress_callback("Checking cross-document consistency & terminology...", 68)
+        
+        if review_mode == "pro":
+            try:
+                consistency_findings = _review_consistency_with_llm(client, text_model, doc_summary)
+                if consistency_findings:
+                    findings.extend(consistency_findings)
+            except Exception as e:
+                findings.append({
+                    "category": "CROSS_REFERENCE_ACCURACY",
+                    "severity": "MINOR",
+                    "page": "-",
+                    "section": "ALL",
+                    "comment": f"Error during consistency check: {str(e)}",
+                    "source": "llm_error"
+                })
+
+        # ── STEP 4: Table-specific review (LLM) ──
+        if parsed_doc.get("tables"):
+            if progress_callback:
+                progress_callback("Deep-reviewing tables and data...", 75)
+            
+            if review_mode == "pro":
+                try:
+                    table_findings = _review_tables_with_llm(client, text_model, parsed_doc)
+                    if table_findings:
+                        findings.extend(table_findings)
+                except Exception as e:
+                    pass
+            elif "UNITS_CALCULATIONS" in active_categories:
+                try:
+                    table_findings = _review_tables_with_llm(client, text_model, parsed_doc, ["UNITS_CALCULATIONS"])
+                    if table_findings:
+                        findings.extend(table_findings)
+                except Exception as e:
+                    pass
+
+        # ── STEP 5: Image-specific review (use vision model) ──
+        if parsed_doc.get("images") and any(m in img_model.lower() for m in ["vl", "vision", "llava", "qwen"]):
+            total_images = min(len([i for i in parsed_doc["images"] if i.get("full_b64") and not i.get("is_small")]), 10)
+            if progress_callback:
+                progress_callback(f"Reviewing {total_images} images/diagrams with {img_model}...", 82)
+            
+            if review_mode == "pro":
+                try:
+                    image_findings = _review_images_with_llm(client, img_model, parsed_doc, doc_summary, progress_callback)
+                    if image_findings:
+                        findings.extend(image_findings)
+                except Exception as e:
+                    pass
+
+    except Exception as e:
+        # Catch-all for review logic so we at least return what we found
+        findings.append({
+            "category": "LOGICAL_CONSISTENCY",
+            "severity": "CRITICAL",
+            "page": "-",
+            "section": "System",
+            "comment": f"Critical review engine failure: {str(e)}",
+            "source": "system_error"
+        })
+
+    # Deduplicate and sort findings safely
+    if progress_callback:
+        progress_callback("Deduplicating and finalizing findings...", 92)
+    
+    if findings:
+        findings = _deduplicate_findings(findings)
+        findings.sort(key=lambda f: SEVERITY_LEVELS.get(f.get("severity", "MINOR"), {}).get("weight", 0), reverse=True)
+
+    # Number findings and assign fix_type
+    for idx, f in enumerate(findings, 1):
+        f["id"] = idx
+        if "fix_type" not in f:
+            f["fix_type"] = _classify_fix_type(f)
+        if "status" not in f:
+            f["status"] = "OPEN"
+
+    return findings

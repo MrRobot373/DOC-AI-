@@ -1,0 +1,279 @@
+﻿
+====================================================================================================
+FILE: Doc_Review_UltraSmall_HDD (1) (1).xlsx
+====================================================================================================
+Headers: {1: 'No', 2: 'Page', 3: 'Item', 4: 'Comments', 5: 'Rank', 6: 'Cat', 7: 'By', 8: 'Date', 9: 'TechM Response', 10: 'Date'}
+Total rows: 112
+Comment col: 4, Page col: 2, Item col: 3, Rank col: 5, Cat col: 6
+
+[#1] Page:109 | Item:Figure 72 | Rank:B | Cat:I
+  >> "Figure 72 Pinoutput..." may be "Figure 72 Pinout..."
+
+[#2] Page:59 | Item:first paragraph | Rank:C | Cat:I
+  >> "bring" -> "brings"
+
+[#3] Page:1 | Item:Scope and Purpose | Rank:B | Cat:F
+  >> What is the criteria for picking up devices and circuits to ?   It says "This document provides information regarding all the IC chips that we intend to use in this design." but, for example, there is
+
+[#4] Page:1 | Item:Chap 6~32 | Rank:C | Cat:F
+  >> What is the order of the chapters?
+
+[#5] Page:- | Item:- | Rank:C | Cat:F
+  >> What is the rule for number of digit in this document?
+
+[#6] Page:1 | Item:Scope and Purpose | Rank:C | Cat:I
+  >> Expectation to "Hardware Design Document" will be description of design concept for the details of hardware, rather than "information regarding all the IC chips that we intended to use in this design"
+
+[#7] Page:1 | Item:Scope and Purpose | Rank:B | Cat:F
+  >> It still says "information regarding all the IC chips that we intended to use in this design" while this document shows "selected" devices.  Need to mention about it.  (Same as #3)
+
+[#8] Page:1 | Item:List of pending items | Rank:B | Cat:F
+  >> Do we have any change plan for phase 5 to be listed here?   - Changing OBC transformer winding ratio? - Changing Custom inductor for with Litz wire with Kool Mu core? - Any change related to EMC/EMI e
+
+[#9] Page:1 | Item:Grouping of the chapters | Rank:A | Cat:F
+  >> Chapter 33 is "3V3 DC-DC Regulator", not Abbreviations.
+
+[#10] Page:2 | Item:Reference document | Rank:C | Cat:F
+  >> I think HDD will refer to concept design documents like "Ultrasmall Block Diagram" or "TICO_Ultra-Small_2in1_Concept-Dev" for system design and component selection.  (Requirement -> concept design -> 
+
+[#11] Page:2 | Item:Reference document | Rank:C | Cat:I
+  >> Will it be better to have relationship among documents (Which referes which) and role of each document to clarify what each document describes. - Requirement specifications from TICO - Concept design 
+
+[#12] Page:2 | Item:Reference document | Rank:A | Cat:F
+  >> "Summary Detail Design Report Ultrasmall" for "abbreviation and unit table" is now in this document.
+
+[#13] Page:2 | Item:Reference document | Rank:None | Cat:None
+  >> "Ultrasmall_SRS_V01_Traceability.xlsx" (Version 0.1 dated 27-June-2025" doesn't exist in TICO BOX nor elsewhere. Dated 18 Apr 2025" was shared as WSR material on 22 Apr .
+
+[#14] Page:2 | Item:Revision history | Rank:B | Cat:I
+  >> Inconsistency in date expression.  13-Jun-2025  /  10-Jul-25
+
+[#15] Page:13 | Item:Table 1 | Rank:A | Cat:F
+  >> Did surge Voltage has changed from 2500V? In Ultra-small-2in1_Status_26Jan26.xlsx also says 2500V. https://tico-group.box.com/s/y1wuunnrlkb23wd6n4ap8pqvpglqv3y7
+
+[#16] Page:14 | Item:Figure 2 | Rank:B | Cat:F
+  >> It shows "Driver PCB", "Power PCB", "Control PCB" and "DC Link Cap PCB".  What are the relations with schematic design which has "Control PCB", DC Link Capacitor 01 PCB", "DC Link Capacitor 02 PCB", "
+
+[#17] Page:14 | Item:Figure 2 | Rank:C | Cat:F
+  >> Why "HV O/P Conn" only in white which is not defined in the coloring legend?
+
+[#18] Page:15 | Item:Figure 3 | Rank:B | Cat:F
+  >> What are the red dotted lines and red bullets highlighted?  May need description on it
+
+[#19] Page:16 | Item:Key component selection | Rank:C | Cat:F
+  >> It says "Components are selected based on System level requirements and architecture definition."  In which document the architecture is defined?  I suppose it will be in concept design report and arc
+
+[#20] Page:16 | Item:Table 2 | Rank:A | Cat:F
+  >> Are the Part Numbers correct?  Though they are "key component", I couldn't find, for example, "PL082X-61-10""ACS725LMATR-20AB-T" and some other connectors in Final Electrical BOM. Please check all lis
+
+[#21] Page:18 | Item:Table 4 | Rank:A | Cat:F
+  >> ditto.  For example, Connector AC Input, AC Output, HVDC Output, LVDC Output cannot be found in Final Electrical BOM. Please check all listed connectors agree with BOM
+
+[#22] Page:19 | Item:Table 2 | Rank:B | Cat:I
+  >> The order of components in table 2 is different from the order of chapters (descriptions) of the components.  Why?
+
+[#23] Page:20-21 | Item:Table 5 | Rank:C | Cat:F
+  >> Electrical specifications uses different number of digit after decimal which is listed in data sheet. chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.infineon.com/assets/row/public/doc
+
+[#24] Page:20-21 | Item:Table 5 | Rank:C | Cat:F
+  >> Do we need to note isoration resistance input-output with thermal condition like data sheet?
+
+[#25] Page:20-21 | Item:Table 5 | Rank:C | Cat:F
+  >> Do we need to note isoration capacitance was at 1MHz? And what is Isolation capacitance?
+
+[#26] Page:22 | Item:Table 7 | Rank:B | Cat:F
+  >> What is the difference from Table 7?  Looks dupication.
+
+[#27] Page:22 | Item:Table 8 | Rank:C | Cat:F
+  >> (Schematics and BOM) Maybe I'm wrong to check this (since I'm don't have much electrical engineering background), but I tried to find Pull down resister value used in PCB, but, in schematics (PFC GaN 
+
+[#28] Page:25, 27 | Item:6.10 & 6.11 | Rank:C | Cat:F
+  >> "6.10 Selection of Gate Resistance for PFC GaN Driver" "6.11	Selection of OBC Primary GaN Driver" The contents seems identical but the titles of the section are different.  Is the note "Gate Resistanc
+
+[#29] Page:25, 27 | Item:6.10 & 6.11 | Rank:C | Cat:F
+  >> "6.10 Selection of Gate Resistance for PFC GaN Driver" "6.11	Selection of OBC Primary GaN Driver" The contents seems identical but the titles of the section are different.  Is the note "Gate Resistanc
+
+[#30] Page:(Schematics) | Item:Reference document | Rank:B | Cat:F
+  >> The latest HDD has different chapter structure so the reference in schematics seems shifted.  But the reference clearly shows version number of the HDD so that it will be okay.   Please be careful on 
+
+[#31] Page:31 | Item:Table 14 | Rank:C | Cat:F
+  >> Do we need to note the conditions for Peak Source Current, like described in the data sheet? chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.allegromicro.com/-/media/files/datasheets/a
+
+[#32] Page:31 | Item:Table 14 | Rank:B | Cat:F
+  >> In the datasheet, there are description on "output Pull-Up" and "output Pull-down" resisters; are these RIPU/RIPD reffers to them?  Please also be careful about the number of digit after decimal.
+
+[#33] Page:38 | Item:Table 18 | Rank:B | Cat:F
+  >> Same feedback as above #23 chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.infineon.com/assets/row/public/documents/24/49/infineon-2edb7259k-datasheet-en.pdf  Let me skip this check he
+
+[#34] Page:39,40 | Item:Table 19, Table 20 | Rank:B | Cat:F
+  >> Looks like duplication  Let me skip this check here after.
+
+[#35] Page:40 | Item:Table 21 | Rank:C | Cat:F
+  >> Same as #27.  I couldn't find pull-up/pull-down in schematics.  Maybe I'm wrong.
+
+[#36] Page:41 | Item:Table 22 | Rank:C | Cat:F
+  >> Though the logic is the same as data sheet, it looks different in table 22 and Figure 26 where INA and INB are H.
+
+[#37] Page:43 | Item:8.9.7 | Rank:C | Cat:F
+  >> It says "recovery from communication fails"; communication between what to what?
+
+[#38] Page:43, 44 | Item:Figure 27, 28 | Rank:C | Cat:F
+  >> Are these graphs ("Typical IVDDA/B switchng current vs frequency" & "Graph for typical gate charge") related to 8.9.7 "CT communication and input to output data transmission?
+
+[#39] Page:- | Item:(Chapter name) | Rank:C | Cat:F
+python : C:\Users\yash badgujar\AppData\Local\anaconda3\Lib\site-packages\openpyxl\reader\drawings.py:67: UserWarning: 
+wmf image format is not supported so the image is being dropped
+At line:1 char:1
++ python extract_comments.py 2>&1 | Out-File -FilePath "extracted_comme ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\yash b...s being dropped:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  warn(msg)
+  >> Some chapter's name has parts name (like "8. PFC SiC, DCDC Primary and Secondary Gate Driver (2EDB7259K)") but the others are not (like "9. Primary side Isolated DC-DC Module").  What is the reason of
+
+[#40] Page:51 | Item:Table 30 | Rank:C | Cat:I
+  >> Inconsistency on expression.  GNDP listed all pin # from 8 to 18 while VEE notes 19-27.  Better use same notation.
+
+[#41] Page:51 | Item:Table 30 & 31 | Rank:C | Cat:I
+  >> These tables are seems to be one same table.  (in data sheet). chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.ti.com/jp/lit/ds/symlink/ucc14141-q1.pdf?ts=1775013892348&ref_url=https%2
+
+[#42] Page:53 | Item:Table 33 | Rank:B | Cat:F
+  >> Min value of VIN shows as "8(1)".  What "(1)" mean? (It seems to be copy and paste from data sheet).
+
+[#43] Page:53 | Item:Table 33 | Rank:B | Cat:F
+  >> What VDD-VEE mean? (In datasheet, it says "See the (VDD-VEE) and (COM-VEE) Load Recommended Operating Area section for maximum rated values across temperature and VVIN conditions for different (VDD-VE
+
+[#44] Page:54 | Item:Table 35 | Rank:C | Cat:I
+  >> It will be easier for the reader to locate where CIN, COUT1, VIN, VDD are described (Fig. 32).
+
+[#45] Page:54 | Item:Table 35 | Rank:A | Cat:F
+  >> What is the value for VIN and VDD?  What is "6, 7 | P"?   Table cell seems to be corrupted.
+
+[#46] Page:54 | Item:Table 35 and note | Rank:B | Cat:F
+  >> The note below table 35 is better to be bring in the NOTES of each CIN/COUT.
+
+[#47] Page:55 | Item:9.9.2 | Rank:A | Cat:F
+  >> "COUTB1" shall be "COUT1B" looking at Fig. 32
+
+[#48] Page:55 | Item:9.9.2 | Rank:A | Cat:F
+  >> It says "The required C OUT2 and COUT3 capacitance can be reduced by introducing a COUT1B capacitor" What is the result of hardware design?  Reduced?  Kept?  As HDD, that decision might be required to
+
+[#49] Page:55 | Item:9.9.2 | Rank:A | Cat:I
+  >> Subscript indication is shown as "C<sub>OUT1B</sub>",  Correct them to subscript.  Same errors are observed following pages.  Correct them.
+
+[#50] Page:51-61 | Item:(Subscript) | Rank:A | Cat:F
+  >> Inconsistency in port name.  For example, CIN/CIN., COUT1B/COUT1B.  Be careful about VIN and VIN are different location. (Data sheet looks like mixing them, though)
+
+[#51] Page:55- | Item:Figure 9-4,... | Rank:A | Cat:F
+  >> Where is Figure 9-4, Figure 9-5?  Do you ask reader to download data sheet?
+
+[#52] Page:55 | Item:COUT*3 | Rank:A | Cat:F
+  >> What is COUT*1, COUT*3?
+
+[#53] Page:55- | Item:COUT18 | Rank:A | Cat:F
+  >> What is COUT18?
+
+[#54] Page:56 | Item:RIM | Rank:A | Cat:F
+  >> What is RIM?  Not RLIM?
+
+[#55] Page:56 | Item:RIM calculation | Rank:C | Cat:I
+  >> It says "The final capacitor values will be used to calculate RIM, as described in the next section.".  It is better to point out as "9.3.3" for clarity.
+
+[#56] Page:56 | Item:Figure 38 | Rank:C | Cat:F
+  >> It suddenly appears without explanation nor reference from test.  What is the relation to the discussion nearby?  Looks like continuation of COUTx calculation...
+
+[#57] Page:57 | Item:Equation 7, 8, 3 | Rank:A | Cat:F
+  >> Where is Equation 7, Equation 8, Equation 3? It looks like dead-copy of data sheet without copying equation number.
+
+[#58] Page:58 | Item:(Conclusion of the calculation) | Rank:B | Cat:F
+  >> What is the relationship between the calculation for COUT1B, COUT2, COUT3 at the bottom of p57 and final values used for? If just use Figure 40 to decide the value, then previous equations are less im
+
+[#59] Page:58 | Item:9.9.3 | Rank:A | Cat:F
+  >> This section is very difficult to understand as if it skipps intermittent discussion.  p59 starts from "would not change"  What would not change? Where RLIM_MAX_L2 comes (how it was calculated?) and s
+
+[#60] Page:None | Item:9.9.4 | Rank:B | Cat:F
+  >> How was RFBVDD_TOP calculated?  It looks like suddenly appeard as 88.70k╬⌐.  Same in p60 RFBVEE_TOP
+
+[#61] Page:59 | Item:9.9.4 | Rank:A | Cat:F
+  >> It refers Figure 45 but there is no RFBVDD_TOP or RFBDD_BOT.  It might be Figure 43.  Check all figure and table reference again to confirm they are correctlry pointing out intended figure/table.
+
+[#62] Page:62 | Item:10 | Rank:A | Cat:F
+  >> LTM8057EYPBF seems to be not appearing in table 2.
+
+[#63] Page:63 | Item:Table 37 | Rank:C | Cat:I
+  >> Better to use superscript (VOUT1-0.879) than use "^" (VOUT1^-0.879)
+
+[#64] Page:63 | Item:Table 37 | Rank:None | Cat:None
+  >> Where is (Note 3)?
+
+[#65] Page:63 | Item:Table 37 | Rank:C | Cat:F
+  >> Number of decimal places are different from data sheet. Also some value location (min/typ/max) are different (but this can be better with our location for understanding). chrome-extension://efaidnbmnn
+
+[#66] Page:63 | Item:Table 37 | Rank:C | Cat:F
+  >> "RADJ" "CIN", "COUT" better to be shown in schematics or block diagram for easy understandings.  Figure 46 can have that information but not. (RADJ = R3483 ?, if so, write it somewhere)
+
+[#67] Page:68 | Item:11.2 | Rank:A | Cat:F
+  >> "TPS5516x-Q1""TPS55165-Q1" doesn't appears in table 2 nor E-BOM.  Please check.
+
+[#68] Page:69 | Item:Table 41 | Rank:A | Cat:F
+  >> What are the Type means?  Legend required.
+
+[#69] Page:70 | Item:11.7.1  | Rank:B | Cat:I
+  >> Better use consistent expression for rating in this document.  It varies "Max Ratings", "Maximum Ratings", "Absolute Maximum Ratings",...
+
+[#70] Page:71 | Item:11.9.1 | Rank:C | Cat:F
+  >> What is the "typical application" to refer to in Note?
+
+[#71] Page:- | Item:- | Rank:C | Cat:F
+  >> Most of the text are copy & paste from data sheet so the some descriptions includes introduction of series product.  It will be good to focus on the exact device we decided to use for Ultra Small with
+
+[#72] Page:72 | Item:Capacitors  | Rank:A | Cat:F
+  >> What are C1722/C1723/C1726/C1727/C1724? There is no information on those capacitors. (May need to update with Figure 53). Circuit diagram base reference is a good idea, I think.
+
+[#73] Page:72 | Item:Equation | Rank:A | Cat:F
+  >> Where can I refer to Equation 3? Also please be careful to use "Equation n" because this document has a lot of equations so that it can be confusing.  Use rule like Chapter-Equetion # (like 11-1) to i
+
+[#74] Page:73 | Item:Capacitors  | Rank:A | Cat:F
+  >> same as #72
+
+[#75] Page:74 | Item:Capacitors , Resisters | Rank:A | Cat:F
+  >> same as #72 with R1720
+
+[#76] Page:77 | Item:12 | Rank:A | Cat:F
+  >> ACS730KLCTR is not listed in Table 2
+
+====================================================================================================
+FILE: Ultrasmall_Ph4_WCCA_SCTM_Review.xlsx
+====================================================================================================
+Headers: {}
+Total rows: 188
+Comment col: None, Page col: None, Item col: None, Rank col: None, Cat col: None
+
+====================================================================================================
+FILE: Ultrasmall_Ph4_HSIS_Review.xlsx
+====================================================================================================
+Headers: {1: 'No', 2: 'σ»╛Φ▒í', 3: 'πé│πâíπâ│πâê', 4: 'Date', 5: 'TICO', 6: 'Tech M comments'}
+Total rows: 22
+Comment col: 6, Page col: None, Item col: None, Rank col: None, Cat col: None
+
+[#1] Page:None | Item:None | Rank:None | Cat:None
+  >> We updated it as you suggested.
+
+[#2] Page:None | Item:None | Rank:None | Cat:None
+  >> We updated it as you suggested.
+
+[#3] Page:None | Item:None | Rank:None | Cat:None
+  >> Pin no 57 MCU_PFC_GAN_2 and  Pin no 142 MCU_PFC_GAN_4  updated it.
+
+[#4] Page:None | Item:None | Rank:None | Cat:None
+  >> We updated it as you suggested.
+
+[#5] Page:None | Item:None | Rank:None | Cat:None
+  >> We updated it as you suggested. CAN_TX -->CAN_TX , CAN_RX-->CAN-->RX
+
+[#6] Page:None | Item:None | Rank:None | Cat:None
+  >> Pin no 57 : TOUT105_OUT and  Pin no 142 : TOUT23_OUT updated as per suggested
+
+[#7] Page:None | Item:None | Rank:None | Cat:None
+  >> The analog scaling factor updated to ┬▒100 mV/A instead of ┬▒5 mV/A, based on the calculations in the reference sheet.

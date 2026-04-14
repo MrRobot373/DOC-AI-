@@ -41,8 +41,13 @@ def parse_document(filepath):
     result = {
         "filename": os.path.basename(filepath),
         "sections": [],
+        "headings": [],
         "tables": [],
         "images": [],
+        "toc": {
+            "title": None,
+            "entries": [],
+        },
         "formatting": {
             "default_font": None,
             "default_size": None,
@@ -82,9 +87,9 @@ def parse_document(filepath):
     # Heuristic page estimation
     # Calculate lines per page from margins and font size
     margins = result["formatting"].get("page_margins", {})
-    top_margin = margins.get("top", 1.0)
-    bottom_margin = margins.get("bottom", 1.0)
-    default_size_pt = result["formatting"].get("default_size", 11)
+    top_margin = margins.get("top") or 1.0
+    bottom_margin = margins.get("bottom") or 1.0
+    default_size_pt = result["formatting"].get("default_size") or 11
     
     # A4/Letter = ~11 inches height. Usable height = 11 - top - bottom
     usable_height_inches = 11.0 - top_margin - bottom_margin
@@ -119,9 +124,15 @@ def parse_document(filepath):
 
         text = para.text.strip()
         style_name = para.style.name if para.style else ""
+        is_toc_entry = _is_toc_paragraph(style_name, para)
+
+        if not result["toc"]["title"] and _is_toc_title(text, style_name):
+            result["toc"]["title"] = text
 
         # Detect heading levels
-        heading_level = _get_heading_level(style_name, text)
+        heading_level = _get_heading_level(para, style_name, text)
+        if is_toc_entry:
+            heading_level = None
 
         # Extract paragraph formatting
         para_format = _extract_paragraph_format(para)
@@ -139,6 +150,23 @@ def parse_document(filepath):
             "has_image": _paragraph_has_image(para),
             "page": current_page,
         }
+
+        if is_toc_entry:
+            toc_entry = _extract_toc_entry(text, style_name, para_idx, current_page)
+            if toc_entry:
+                result["toc"]["entries"].append(toc_entry)
+
+        if heading_level:
+            heading_number, heading_title = _split_heading_number(text, heading_level)
+            result["headings"].append({
+                "text": text,
+                "number": heading_number,
+                "title": heading_title,
+                "level": heading_level,
+                "style": style_name,
+                "index": para_idx,
+                "page": current_page,
+            })
 
         if heading_level and heading_level <= 3:
             # Start new section
@@ -348,9 +376,12 @@ def _emu_to_inches(emu_val):
     return round(emu_val / 914400, 2)
 
 
-def _get_heading_level(style_name, text):
+def _get_heading_level(para, style_name, text):
     """Determine heading level from style or text pattern."""
     if not style_name:
+        return None
+
+    if _is_toc_style(style_name):
         return None
 
     # Built-in heading styles
@@ -361,7 +392,7 @@ def _get_heading_level(style_name, text):
             return 1
 
     # Detect numbered section headings by pattern (e.g., "3.1.2 Title")
-    if re.match(r"^\d+(\.\d+)*\.?\s+\S", text):
+    if _looks_like_numbered_heading(para, text):
         # Count the depth by number of dots
         match = re.match(r"^(\d+(\.\d+)*)", text)
         if match:
@@ -369,6 +400,134 @@ def _get_heading_level(style_name, text):
             return min(len(parts), 6)
 
     return None
+
+
+def _looks_like_numbered_heading(para, text):
+    """Heuristic fallback for numbered headings when proper heading styles are missing."""
+    if not text:
+        return False
+
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if len(normalized) > 140:
+        return False
+    if normalized.endswith((".", ";", ":")):
+        return False
+    if not re.match(r"^\d+(?:\.\d+)*\.?\s+[A-Z]", normalized):
+        return False
+
+    try:
+        ppr = para._element.pPr
+        if ppr is not None and ppr.numPr is not None:
+            return False
+    except Exception:
+        pass
+
+    return True
+
+
+def _is_toc_style(style_name):
+    """Return True when the paragraph style indicates a TOC entry."""
+    if not style_name:
+        return False
+    normalized = style_name.strip().lower()
+    return bool(re.match(r"^toc\s*\d+$", normalized) or re.match(r"^toc\d+$", normalized))
+
+
+def _is_toc_paragraph(style_name, para):
+    """Detect TOC entry paragraphs produced by Word or styled manually."""
+    if _is_toc_style(style_name):
+        return True
+
+    raw_text = para.text or ""
+    if not _looks_like_toc_line(raw_text):
+        return False
+
+    try:
+        xml = para._element.xml
+    except Exception:
+        return False
+
+    return "_Toc" in xml and ("w:hyperlink" in xml or "PAGEREF" in xml)
+
+
+def _is_toc_title(text, style_name):
+    """Detect a TOC title line such as 'Table of Contents' or 'Contents'."""
+    if not text:
+        return False
+
+    normalized = re.sub(r"\s+", " ", text).strip().lower()
+    if normalized in {"table of contents", "contents"}:
+        return True
+
+    return bool(style_name and style_name.strip().lower() == "toc heading")
+
+
+def _extract_toc_entry(text, style_name, para_idx, page):
+    """Extract structured TOC entry data from a TOC paragraph."""
+    clean_text = re.sub(r"\s+", " ", text.replace("\t", " ")).strip()
+    if not clean_text:
+        return None
+
+    level = _get_toc_level(style_name)
+    line_match = re.match(r"^(?P<label>.+?)(?:\.{2,}|\s{2,}|\t+)\s*(?P<page>\d+)\s*$", text.strip())
+    if not line_match:
+        line_match = re.match(r"^(?P<label>.+?)\s+(?P<page>\d+)\s*$", clean_text)
+
+    label = clean_text
+    page_ref = None
+    if line_match:
+        label = re.sub(r"\s+", " ", line_match.group("label")).strip()
+        page_ref = line_match.group("page")
+
+    if _is_toc_title(label, style_name):
+        return None
+
+    number, title = _split_heading_number(label, level)
+    return {
+        "text": label,
+        "number": number,
+        "title": title,
+        "level": level,
+        "page_ref": page_ref,
+        "index": para_idx,
+        "page": page,
+    }
+
+
+def _get_toc_level(style_name):
+    """Extract the TOC nesting level from styles such as 'TOC 2'."""
+    if not style_name:
+        return 1
+
+    match = re.search(r"(\d+)$", style_name.strip())
+    if match:
+        return int(match.group(1))
+    return 1
+
+
+def _looks_like_toc_line(text):
+    """Return True when text has a typical TOC leader and page-number pattern."""
+    if not text:
+        return False
+
+    stripped = text.strip()
+    return bool(re.search(r"(?:\t+|\.{2,}|\s{2,})\s*\d+\s*$", stripped))
+
+
+def _split_heading_number(text, level=None):
+    """Split a heading into section number and title."""
+    if not text:
+        return None, ""
+
+    normalized = re.sub(r"\s+", " ", text).strip()
+    match = re.match(r"^(?P<number>\d+(?:\.\d+)*)\.?\s+(?P<title>.+)$", normalized)
+    if match:
+        number = match.group("number")
+        if "." not in number and level and level > 1:
+            return None, normalized
+        return number, match.group("title").strip()
+
+    return None, normalized
 
 
 def _extract_paragraph_format(para):

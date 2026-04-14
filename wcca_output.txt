@@ -1,0 +1,34 @@
+﻿python : C:\Users\yash badgujar\AppData\Local\anaconda3\Lib\site-packages\openpyxl\reader\drawings.py:67: UserWarning: 
+wmf image format is not supported so the image is being dropped
+At line:1 char:1
++ python check_wcca.py 2>&1 | Out-File -FilePath "wcca_output.txt" -Enc ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\yash b...s being dropped:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  warn(msg)
+
+=== Sheet: About the WCCA (188 rows x 11 cols) ===
+  R2: C2:WORST CASE CIRCUIT ANALYSIS
+  R6: C2:Document | C3:Worst Case Circuit Analysis
+  R7: C2:Project | C3:TICO Ultrasmall 2 in 1
+  R9: C2:About this document
+  R10: C2:Scope and Purpose
+  R11: C2:The purpose is to identify the worst case parameters (relate
+  R16: C2:Intended Audience This document is used by the circuit desig
+  R18: C2:List of Pending Items 
+  R20: C2:S.No | C3:Description | C5:Completion Date
+  R21: C3:None
+  R24: C2:Reference Documents
+
+=== Sheet: Block Diagram (55 rows x 33 cols) ===
+
+=== Sheet: 1_Input EMI Filter (180 rows x 29 cols) ===
+  R2: C2:Circuit Name | C3:Input EMI Filter
+  R4: C2:Schematic
+  R6: C1:Details
+  R21: C2:Worst Case Operating Condition | C3:Maximum Supply current from the grid | C4:50 | C5:A | C6:Refer SRS for maximum current
+  R22: C3:Maximum supply voltage | C4:264 | C5:V | C6:Refer SRS for maximum Voltage
+  R23: C3:Minimum Operating Temperature | C4:-40 | C5:┬░C | C6:TICO Requirements
+  R24: C3:Nominal Temperature | C4:25 | C5:┬░C
+  R25: C3:Maximum Operating Temperature | C4:85 | C5:┬░C | C6:TICO Requirements
