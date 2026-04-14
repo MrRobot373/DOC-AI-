@@ -79,6 +79,34 @@ def parse_document(filepath):
     except Exception:
         pass
 
+    # ==========================================================
+    # PRE-PASS: Build TOC page-number anchors.
+    # The document TOC has the real Word-computed page numbers.
+    # We snap the running page counter to these at each heading,
+    # eliminating heuristic drift (was 7-14 pages off).
+    # ==========================================================
+    toc_page_map = {}  # section_number OR title_lower -> int page
+    for _pp in doc.paragraphs:
+        _ps = _pp.style.name if _pp.style else ""
+        _pt = _pp.text.strip()
+        if not _pt:
+            continue
+        if _is_toc_paragraph(_ps, _pp):
+            _pe = _extract_toc_entry(_pt, _ps, 0, 1)
+            if _pe and _pe.get("page_ref"):
+                try:
+                    _pnum = int(_pe["page_ref"])
+                    if _pe.get("number"):
+                        toc_page_map[_pe["number"]] = _pnum
+                    _ptitle = (_pe.get("title") or "").strip().lower()
+                    if _ptitle:
+                        toc_page_map[_ptitle] = _pnum
+                    _pfull = _pe.get("text", "").strip().lower()
+                    if _pfull and _pfull not in toc_page_map:
+                        toc_page_map[_pfull] = _pnum
+                except (ValueError, TypeError):
+                    pass
+
     # Parse paragraphs into sections
     current_section = None
     all_text_lines = []
@@ -99,11 +127,18 @@ def parse_document(filepath):
     pages_from_breaks = set()  # Track which pages we detected via hard breaks
 
     for para_idx, para in enumerate(doc.paragraphs):
-        # Check for page breaks (hard breaks or rendered breaks)
+        # Detect page breaks: check para-level XML first (fastest),
+        # then fall back to per-run inspection.
         has_page_break = False
-        for run in para.runs:
-            if 'lastRenderedPageBreak' in run._element.xml or 'w:br w:type="page"' in run._element.xml:
-                has_page_break = True
+        _para_xml = para._element.xml
+        if 'lastRenderedPageBreak' in _para_xml or 'w:type="page"' in _para_xml:
+            has_page_break = True
+        else:
+            for run in para.runs:
+                _rx = run._element.xml
+                if 'lastRenderedPageBreak' in _rx or 'w:type="page"' in _rx:
+                    has_page_break = True
+                    break
         
         if has_page_break:
             current_page += 1
@@ -158,6 +193,27 @@ def parse_document(filepath):
 
         if heading_level:
             heading_number, heading_title = _split_heading_number(text, heading_level)
+            # ----------------------------------------------------------
+            # STEP 2: TOC calibration — snap page counter to TOC anchor.
+            # This corrects heuristic drift at each heading boundary.
+            # Priority: section number > title text > full text match.
+            # ----------------------------------------------------------
+            _calibrated = False
+            if heading_number and heading_number in toc_page_map:
+                current_page = toc_page_map[heading_number]
+                cumulative_lines = 0
+                _calibrated = True
+            if not _calibrated and heading_title:
+                _title_key = heading_title.strip().lower()
+                if _title_key in toc_page_map:
+                    current_page = toc_page_map[_title_key]
+                    cumulative_lines = 0
+                    _calibrated = True
+            if not _calibrated and text:
+                _full_key = text.strip().lower()
+                if _full_key in toc_page_map:
+                    current_page = toc_page_map[_full_key]
+                    cumulative_lines = 0
             result["headings"].append({
                 "text": text,
                 "number": heading_number,
