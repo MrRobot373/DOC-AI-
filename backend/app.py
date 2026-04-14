@@ -71,13 +71,28 @@ if SUPABASE_URL and SUPABASE_KEY:
 STATE_FILE = os.path.join(UPLOAD_DIR, "review_state.json")
 
 def _load_store():
+    store = {}
+    # 1. Try to load from local file
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, 'r') as f:
-                return json.load(f)
+                store = json.load(f)
         except Exception:
-            return {}
-    return {}
+            store = {}
+    
+    # 2. If nothing in local file OR local file missing, try Supabase (Cloud Persistence)
+    if not store and supabase:
+        try:
+            response = supabase.table("review_state").select("*").execute()
+            if response.data:
+                for row in response.data:
+                    store[row["id"]] = row["data"]
+                # Save locally so subsequent reads are fast
+                _save_store(store)
+        except Exception as e:
+            print(f"Supabase load error: {e}")
+            
+    return store
 
 def _save_store(store):
     # Save to local file
