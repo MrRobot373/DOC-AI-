@@ -1551,3 +1551,131 @@ def _format_section_number(parts):
         return ""
     return ".".join(str(p) for p in parts)
 
+
+def _check_spacing_errors(parsed_doc):
+    findings = []
+    for section in parsed_doc.get("sections", []):
+        for para in section.get("paragraphs", []):
+            text = para.get("text", "")
+            if "  " in text.strip():
+                # Avoid flagging indentation spaces
+                findings.append({
+                    "category": "FORMATTING_ALIGNMENT",
+                    "severity": "MINOR",
+                    "page": str(para.get("page", "-")),
+                    "section": section.get("heading", ""),
+                    "comment": "Double spaces detected within the text. Use a single space after punctuation.",
+                    "fix": "Remove extra spaces.",
+                    "source": "local",
+                    "fix_type": "MANUAL",
+                })
+                break # Only flag once per section max to avoid noise
+    return findings
+
+def _check_repeated_words(parsed_doc):
+    findings = []
+    repeated_pattern = re.compile(r'\b([A-Za-z]+)\s+\1\b', re.IGNORECASE)
+    for section in parsed_doc.get("sections", []):
+        for para in section.get("paragraphs", []):
+            text = para.get("text", "")
+            match = repeated_pattern.search(text)
+            if match:
+                findings.append({
+                    "category": "GRAMMAR_SPELLING",
+                    "severity": "MINOR",
+                    "page": str(para.get("page", "-")),
+                    "section": section.get("heading", ""),
+                    "comment": f"Repeated word detected: '{match.group(0)}'.",
+                    "fix": f"Remove the duplicate word '{match.group(1)}'.",
+                    "source": "local",
+                    "fix_type": "AUTO",
+                })
+    return findings
+
+def _check_unmatched_brackets(parsed_doc):
+    findings = []
+    for section in parsed_doc.get("sections", []):
+        for para in section.get("paragraphs", []):
+            text = para.get("text", "")
+            if "(" in text and ")" not in text[text.find("("):] or ")" in text and "(" not in text[:text.find(")")]:
+                findings.append({
+                    "category": "GRAMMAR_SPELLING",
+                    "severity": "MINOR",
+                    "page": str(para.get("page", "-")),
+                    "section": section.get("heading", ""),
+                    "comment": "Unmatched parenthesis detected in text.",
+                    "fix": "Ensure all brackets are closed correctly.",
+                    "source": "local",
+                    "fix_type": "MANUAL",
+                })
+    return findings
+
+def _check_empty_paragraphs(parsed_doc):
+    # Too many empty paragraphs can mean bad formatting
+    findings = []
+    empty_streak = 0
+    for section in parsed_doc.get("sections", []):
+        for para in section.get("paragraphs", []):
+            if not para.get("text", "").strip():
+                empty_streak += 1
+                if empty_streak == 3:
+                    findings.append({
+                        "category": "FORMATTING_ALIGNMENT",
+                        "severity": "MINOR",
+                        "page": str(para.get("page", "-")),
+                        "section": section.get("heading", ""),
+                        "comment": "Multiple consecutive empty line breaks detected.",
+                        "fix": "Use paragraph spacing instead of empty hard carriage returns.",
+                        "source": "local",
+                        "fix_type": "MANUAL",
+                    })
+            else:
+                empty_streak = 0
+    return findings
+
+def _check_min_typ_max_tables(parsed_doc):
+    findings = []
+    # Search tables for Min, Typ, Max columns and ensure logical order
+    for tbl in parsed_doc.get("tables", []):
+        rows = tbl.get("rows", [])
+        if not rows: continue
+        headers = [col.strip().lower() for col in rows[0]]
+        
+        min_idx = headers.index('min') if 'min' in headers else -1
+        typ_idx = headers.index('typ') if 'typ' in headers else -1
+        max_idx = headers.index('max') if 'max' in headers else -1
+        
+        if typ_idx != -1 and ((min_idx != -1 and min_idx > typ_idx) or (max_idx != -1 and typ_idx > max_idx)):
+            findings.append({
+                "category": "TABLE_QUALITY",
+                "severity": "MINOR",
+                "page": "-",
+                "section": tbl.get("name", "Table"),
+                "comment": "Min, Typ, Max columns are not in standard logical order.",
+                "fix": "Reorder columns to Min, Typ, Max.",
+                "source": "local",
+                "fix_type": "MANUAL",
+            })
+    return findings
+
+def _check_unit_standardization(parsed_doc):
+    findings = []
+    # Checks for missing spaces before units e.g. 5V instead of 5 V
+    bad_unit_pattern = re.compile(r'\b\d+(V|mA|uA|A|Hz|kHz|MHz)\b')
+    for section in parsed_doc.get("sections", []):
+        for para in section.get("paragraphs", []):
+            text = para.get("text", "")
+            match = bad_unit_pattern.search(text)
+            if match:
+                findings.append({
+                    "category": "UNITS_CALCULATIONS",
+                    "severity": "MINOR",
+                    "page": str(para.get("page", "-")),
+                    "section": section.get("heading", ""),
+                    "comment": f"Missing space before unit: '{match.group(0)}'. Standard convention is to have a space between the number and unit.",
+                    "fix": "Insert a space between the numeric value and the unit.",
+                    "source": "local",
+                    "fix_type": "MANUAL",
+                })
+    return findings
+
