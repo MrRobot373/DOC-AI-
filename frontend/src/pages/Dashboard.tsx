@@ -50,7 +50,7 @@ export default function Dashboard({ user }: DashboardProps) {
     ])
     const [selectedModel, setSelectedModel] = useState("nemotron-3-super:cloud")
     const [visionModel, setVisionModel] = useState("qwen3.5:397b-cloud")
-    const [reviewMode, setReviewMode] = useState<"normal" | "pro">("pro")
+    const [reviewMode, setReviewMode] = useState<"normal" | "pro" | "max">("pro")
 
     // Review State
     const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -600,7 +600,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                 { n: "1", title: "Configure API Key", desc: "Click your profile icon → \"API Configuration\". Paste your Ollama API Key and click \"Test & Save\"." },
                                 { n: "2", title: "Select File Type", desc: "Choose between \"Word Document\" (.docx) or \"Excel Sheet\" (.xlsx) using the toggle above the upload area." },
                                 { n: "3", title: "Upload Your File", desc: "Click the dashed upload box to browse your computer and select a file." },
-                                { n: "4", title: "Choose Review Mode", desc: "Normal Mode: Checks grammar, terminology, and units (faster). Pro Mode: Deep 12-category technical review." },
+                                { n: "4", title: "Choose Review Mode", desc: "Normal: faster grammar/terminology/unit checks. Pro: deep technical review. Max: strict Kimi-style engineering analysis with evidence validation." },
                                 { n: "5", title: "Start AI Review", desc: "Click \"Start AI Review\" and wait 1-5 minutes. A live progress bar tracks the analysis." },
                                 { n: "6", title: "Download Report", desc: "Once complete, click \"Download Excel Report\" to get a professional report with findings, severity levels, and fix instructions." },
                             ].map(step => (
@@ -714,6 +714,12 @@ export default function Dashboard({ user }: DashboardProps) {
                                     className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${reviewMode === "pro" ? "bg-white text-black shadow-lg" : "text-gray-400 hover:text-white"}`}
                                 >
                                     Pro
+                                </button>
+                                <button
+                                    onClick={() => setReviewMode("max")}
+                                    className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${reviewMode === "max" ? "bg-white text-black shadow-lg" : "text-gray-400 hover:text-white"}`}
+                                >
+                                    Max
                                 </button>
                             </div>
 

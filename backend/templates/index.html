@@ -912,6 +912,15 @@
 
             <input type="file" id="fileInput" accept=".docx,.doc" onchange="handleFileSelect(event)">
 
+            <div style="margin-top: 20px; max-width: 280px;">
+                <label class="form-label">Review Mode</label>
+                <select class="form-input" id="reviewMode">
+                    <option value="normal">Normal - faster basic review</option>
+                    <option value="pro" selected>Pro - deep technical review</option>
+                    <option value="max">Max - Kimi-style evidence review</option>
+                </select>
+            </div>
+
             <div style="margin-top: 20px;">
                 <button class="btn btn-primary" id="reviewBtn" disabled onclick="startReview()">
                     🚀 Start AI Review
@@ -1084,6 +1093,7 @@
             const modelSelect = document.getElementById('modelSelect').value;
             const modelManual = document.getElementById('modelManual').value.trim();
             const model = modelManual || modelSelect;
+            const reviewMode = document.getElementById('reviewMode').value;
 
             if (!apiKey) { alert('Please enter your API key first'); return; }
             if (!model) { alert('Please select or type a model name'); return; }
@@ -1104,6 +1114,7 @@
             formData.append('api_key', apiKey);
             formData.append('host', host);
             formData.append('model', model);
+            formData.append('review_mode', reviewMode);
             formData.append('document', selectedFile);
 
             try {

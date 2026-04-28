@@ -11,6 +11,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+from pathlib import Path
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from supabase import create_client, Client
@@ -25,6 +26,14 @@ from review_engine import (
     SEVERITY_LEVELS,
 )
 from report_generator import generate_excel_report
+from kimi_style_analyzer.analyze import (
+    CATEGORIES as MAX_REVIEW_CATEGORIES,
+    run_local_checks as run_max_local_checks,
+    run_llm_review as run_max_llm_review,
+    run_vision_review as run_max_vision_review,
+    validate_and_dedupe as validate_max_findings,
+    write_excel as write_max_excel_report,
+)
 
 app = Flask(__name__)
 CORS(app)
@@ -249,6 +258,50 @@ Message:
     return jsonify({"success": True, "message": "Feedback received"})
 
 
+def _convert_max_findings_for_ui(max_findings):
+    """Convert Kimi-style Finding objects into the existing UI/report state shape."""
+    severity_map = {"High": "CRITICAL", "Medium": "MAJOR", "Low": "MINOR"}
+    converted = []
+    for idx, finding in enumerate(max_findings, 1):
+        converted.append({
+            "id": idx,
+            "page": "-",
+            "section": finding.location,
+            "comment": f"{finding.description}\n\nDetails: {finding.details}" + (f"\n\nEvidence: {finding.evidence}" if finding.evidence else ""),
+            "fix": "Review and correct the cited document content. Use the evidence/details fields in the Max report for the exact issue.",
+            "category": finding.category,
+            "severity": severity_map.get(finding.severity, "MAJOR"),
+            "fix_type": "MANUAL",
+            "status": "OPEN",
+            "source": finding.source,
+        })
+    return converted
+
+
+def _category_name_for_mode(category_key, review_mode):
+    if review_mode == "max":
+        return category_key
+    return REVIEW_CATEGORIES.get(category_key, {}).get("name", category_key)
+
+
+def _category_icon_for_mode(category_key, review_mode):
+    if review_mode == "max":
+        return MAX_REVIEW_CATEGORIES.get(category_key, "")
+    return REVIEW_CATEGORIES.get(category_key, {}).get("icon", "")
+
+
+def _categories_for_mode(review_mode):
+    if review_mode == "max":
+        return {
+            name: {"name": name, "icon": icon, "description": "Max-mode engineering review category"}
+            for name, icon in MAX_REVIEW_CATEGORIES.items()
+        }
+    return {
+        k: {"name": v["name"], "icon": v["icon"], "description": v["description"]}
+        for k, v in REVIEW_CATEGORIES.items()
+    }
+
+
 def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None):
     """Background worker that runs the full document review."""
     store = _load_store()
@@ -300,7 +353,22 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             _save_store(s)
 
         # Run review
-        findings = review_document(client, model, parsed, progress_callback=progress_cb, review_mode=review_mode, vision_model=vision_model)
+        max_mode_findings = None
+        if review_mode == "max":
+            if file_type == "excel":
+                raise ValueError("Max mode currently supports Word documents only. Use Normal or Pro for Excel files.")
+            progress_cb("Max mode: running strict local checks...", 28)
+            max_mode_findings = run_max_local_checks(parsed)
+            progress_cb(f"Max mode: {len(max_mode_findings)} local findings. Running deep LLM review...", 40)
+            max_mode_findings.extend(run_max_llm_review(client, model, parsed))
+            if vision_model:
+                progress_cb("Max mode: running vision review on diagrams/images...", 78)
+                max_mode_findings.extend(run_max_vision_review(client, vision_model, parsed))
+            progress_cb("Max mode: validating evidence and removing weak findings...", 88)
+            max_mode_findings = validate_max_findings(max_mode_findings, parsed)
+            findings = _convert_max_findings_for_ui(max_mode_findings)
+        else:
+            findings = review_document(client, model, parsed, progress_callback=progress_cb, review_mode=review_mode, vision_model=vision_model)
 
         # Generate report
         store = _load_store()
@@ -310,13 +378,16 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         })
         _save_store(store)
 
-        mode_suffix = "Normal" if review_mode == "normal" else "Pro"
+        mode_suffix = {"normal": "Normal", "pro": "Pro", "max": "Max"}.get(review_mode, "Pro")
         report_filename = (
             f"Review_Report_{os.path.splitext(original_filename)[0]}"
             f"_{mode_suffix}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         )
         report_path = os.path.join(REPORTS_DIR, report_filename)
-        generate_excel_report(findings, original_filename, report_path)
+        if review_mode == "max" and max_mode_findings is not None:
+            write_max_excel_report(max_mode_findings, Path(report_path))
+        else:
+            generate_excel_report(findings, original_filename, report_path)
 
         # Build stats
         severity_counts = {}
@@ -341,6 +412,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             "message": "Review complete!",
             "progress": 100,
             "report_filename": report_filename,
+            "review_mode": review_mode,
             "original_filepath": filepath,
             "document_info": {
                 "filename": original_filename,
@@ -356,16 +428,13 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
                 "category_counts": {
                     k: {
                         "count": v,
-                        "name": REVIEW_CATEGORIES.get(k, {}).get("name", k),
-                        "icon": REVIEW_CATEGORIES.get(k, {}).get("icon", ""),
+                        "name": _category_name_for_mode(k, review_mode),
+                        "icon": _category_icon_for_mode(k, review_mode),
                     }
                     for k, v in category_counts.items()
                 },
             },
-            "categories": {
-                k: {"name": v["name"], "icon": v["icon"], "description": v["description"]}
-                for k, v in REVIEW_CATEGORIES.items()
-            },
+            "categories": _categories_for_mode(review_mode),
             "severity_levels": {
                 k: {"label": v["label"], "color": v["color"]}
                 for k, v in SEVERITY_LEVELS.items()
@@ -411,6 +480,10 @@ def start_review():
         return jsonify({"success": False, "error": "API key is required"})
     if not model:
         return jsonify({"success": False, "error": "Model selection is required"})
+    if review_mode not in {"normal", "pro", "max"}:
+        return jsonify({"success": False, "error": f"Invalid review mode: {review_mode}"})
+    if review_mode == "max" and file_type == "excel":
+        return jsonify({"success": False, "error": "Max mode currently supports Word documents only. Use Normal or Pro for Excel files."})
 
     if "document" not in request.files:
         return jsonify({"success": False, "error": "No document file provided"})
@@ -563,7 +636,7 @@ def download_report(report_filename):
     report_path = os.path.join(REPORTS_DIR, report_filename)
 
     # If we found the review, regenerate with latest statuses
-    if owner_review and owner_review.get("findings"):
+    if owner_review and owner_review.get("findings") and owner_review.get("review_mode") != "max":
         try:
             findings = owner_review["findings"]
             doc_name = owner_review.get("document_info", {}).get("filename", "Unknown")
