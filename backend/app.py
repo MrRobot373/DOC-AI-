@@ -13,6 +13,7 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 from supabase import create_client, Client
 
 from doc_parser import parse_document, parse_excel, get_document_summary
@@ -28,7 +29,22 @@ from review_engine import (
 from report_generator import generate_excel_report
 
 app = Flask(__name__)
-CORS(app)
+# Restrict CORS via env in production (comma-separated origins); defaults to open
+# for local/dev so behavior is unchanged until ALLOWED_ORIGINS is set.
+_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*")
+CORS(app, origins="*" if _allowed_origins.strip() == "*" else [o.strip() for o in _allowed_origins.split(",") if o.strip()])
+
+# Cap upload size (default 50 MB) to avoid memory-exhaustion uploads.
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "50")) * 1024 * 1024
+
+
+def _safe_under(directory, filename):
+    """Resolve `filename` under `directory`, refusing path traversal. None if unsafe."""
+    base = os.path.realpath(directory)
+    candidate = os.path.realpath(os.path.join(base, os.path.basename(filename)))
+    if os.path.commonpath([candidate, base]) != base:
+        return None
+    return candidate
 
 # Store active reviews and reports in memory
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -36,26 +52,9 @@ REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-# Task Queue setup
-# Cloud environments use threading (NOT Huey immediate mode which blocks the HTTP request)
-# Local environments use Huey with Redis or Sqlite for crash recovery
-IS_CLOUD_ENV = os.environ.get("RENDER") or os.environ.get("FLY_APP_NAME") or os.environ.get("HEROKU_APP_NAME") or os.environ.get("GCP_PROJECT")
-USE_THREADING = True  # Set to True locally as well so no separate worker is needed!
-
-if not USE_THREADING:
-    try:
-        import redis as _redis
-        _redis.Redis(host='localhost', socket_connect_timeout=1).ping()
-        from huey import RedisHuey
-        huey_queue = RedisHuey('docai_tasks', host='localhost')
-        print(f"[*] Task Queue: RedisHuey (crash-proof local queue)")
-    except Exception:
-        from huey import SqliteHuey
-        huey_queue = SqliteHuey(filename=os.path.join(UPLOAD_DIR, 'huey_tasks.db'))
-        print(f"[*] Task Queue: SqliteHuey (persistent local queue - run start_worker.bat)")
-else:
-    huey_queue = None
-    print(f"[*] Task Queue: Threading (cloud mode - progress polling works correctly)")
+# Background execution: in-process threads (single-worker). Phase 2 replaces this
+# with a durable Redis+RQ queue + a reviews DB table for crash-safe, multi-worker
+# operation. The dead Huey/Redis scaffolding has been removed.
 
 # Supabase Configuration (Pull from Env)
 SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL")
@@ -155,7 +154,7 @@ def list_models():
     return jsonify(result)
 
 
-FEEDBACK_EMAIL = "yash.badgujar@getmysolutions.in"
+FEEDBACK_EMAIL = os.environ.get("FEEDBACK_EMAIL", "")
 
 @app.route("/api/feedback", methods=["POST"])
 def submit_feedback():
@@ -341,8 +340,9 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         _save_store(store)
 
         mode_suffix = {"normal": "Normal", "pro": "Pro", "max": "Max"}.get(review_mode, "Pro")
+        report_base = secure_filename(os.path.splitext(original_filename)[0]) or "document"
         report_filename = (
-            f"Review_Report_{os.path.splitext(original_filename)[0]}"
+            f"Review_Report_{report_base}"
             f"_{mode_suffix}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         )
         report_path = os.path.join(REPORTS_DIR, report_filename)
@@ -457,9 +457,10 @@ def start_review():
         if not file.filename.lower().endswith((".docx", ".doc")):
             return jsonify({"success": False, "error": "Only .docx or .doc files are supported for Document mode"})
 
-    # Save uploaded file
+    # Save uploaded file under a sanitized name (prevents path traversal, B1).
     review_id = str(uuid.uuid4())[:8]
-    filename = f"{review_id}_{file.filename}"
+    safe_name = secure_filename(file.filename) or "document"
+    filename = f"{review_id}_{safe_name}"
     filepath = os.path.join(UPLOAD_DIR, filename)
     file.save(filepath)
 
@@ -472,20 +473,13 @@ def start_review():
     }
     _save_store(store)
 
-    # Dispatch to background thread (allows progress polling to work)
-    if USE_THREADING:
-        thread = threading.Thread(
-            target=_run_review_in_background,
-            args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model),
-            daemon=True
-        )
-        thread.start()
-    else:
-        # Local with Huey — decorate dynamically
-        huey_task = huey_queue.task(retries=1, retry_delay=5)(_run_review_in_background)
-        huey_task(
-            review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model
-        )
+    # Dispatch to a background thread so progress polling works.
+    thread = threading.Thread(
+        target=_run_review_in_background,
+        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model),
+        daemon=True,
+    )
+    thread.start()
 
     return jsonify({"success": True, "review_id": review_id})
 
@@ -591,7 +585,9 @@ def download_report(report_filename):
             owner_review = rdata
             break
 
-    report_path = os.path.join(REPORTS_DIR, report_filename)
+    report_path = _safe_under(REPORTS_DIR, report_filename)
+    if not report_path:
+        return jsonify({"error": "Invalid report name"}), 400
 
     # If we found the review, regenerate with latest statuses (all modes use one report).
     if owner_review and owner_review.get("findings"):
@@ -606,7 +602,7 @@ def download_report(report_filename):
         return send_file(
             report_path,
             as_attachment=True,
-            download_name=report_filename,
+            download_name=os.path.basename(report_filename),
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     return jsonify({"error": "Report not found"}), 404
@@ -615,12 +611,14 @@ def download_report(report_filename):
 @app.route("/api/download-fixed/<filename>")
 def download_fixed_doc(filename):
     """Download the auto-fixed document."""
-    fixed_path = os.path.join(REPORTS_DIR, filename)
+    fixed_path = _safe_under(REPORTS_DIR, filename)
+    if not fixed_path:
+        return jsonify({"error": "Invalid file name"}), 400
     if os.path.exists(fixed_path):
         return send_file(
             fixed_path,
             as_attachment=True,
-            download_name=filename,
+            download_name=os.path.basename(filename),
         )
     return jsonify({"error": "Fixed document not found"}), 404
 
