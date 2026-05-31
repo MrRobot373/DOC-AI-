@@ -59,11 +59,28 @@ def generate_excel_report(findings, doc_filename, output_path):
         "N/A": PatternFill(start_color="e0e0e0", end_color="e0e0e0", fill_type="solid"),
     }
 
-    # Headers
-    headers = ["No", "Page", "Section", "Comment", "Fix", "Category", "Severity", "Fix Type", "Date", "Status"]
-    col_widths = [6, 8, 15, 50, 50, 22, 12, 10, 14, 14]
+    # Column definitions (name-driven so adding columns can't desync the
+    # severity/status formatting or the Status dropdown position).
+    # (header, width, alignment)
+    columns = [
+        ("No", 6, "center"),
+        ("Page", 8, "center"),
+        ("Section", 16, "wrap"),
+        ("Evidence", 38, "wrap"),
+        ("Comment", 50, "wrap"),
+        ("Fix", 44, "wrap"),
+        ("Category", 22, "wrap"),
+        ("Severity", 12, "center"),
+        ("Confidence", 11, "center"),
+        ("Fix Type", 10, "center"),
+        ("Date", 13, "center"),
+        ("Status", 14, "center"),
+    ]
+    headers = [c[0] for c in columns]
+    sev_col = headers.index("Severity") + 1
+    status_col = headers.index("Status") + 1
 
-    for col_idx, (header, width) in enumerate(zip(headers, col_widths), 1):
+    for col_idx, (header, width, _align) in enumerate(columns, 1):
         cell = ws.cell(row=1, column=col_idx, value=header)
         cell.font = header_font
         cell.fill = header_fill
@@ -77,6 +94,12 @@ def generate_excel_report(findings, doc_filename, output_path):
     # Data rows
     review_date = datetime.now().strftime("%Y-%m-%d")
 
+    def _fmt_confidence(val):
+        try:
+            return f"{float(val):.2f}"
+        except (TypeError, ValueError):
+            return "—"
+
     for row_idx, finding in enumerate(findings, 2):
         cat_info = REVIEW_CATEGORIES.get(finding["category"], {})
         cat_name = cat_info.get("name", finding["category"])
@@ -89,40 +112,37 @@ def generate_excel_report(findings, doc_filename, output_path):
         finding_status = finding.get("status", "OPEN")
         fix_type = finding.get("fix_type", "MANUAL")
 
-        row_data = [
-            finding.get("id", row_idx - 1),
-            finding.get("page", "-"),
-            finding.get("section", "-"),
-            finding.get("comment", ""),
-            finding.get("fix", ""),
-            f"{cat_icon} {cat_name}",
-            sev_label,
-            fix_type,
-            review_date,
-            finding_status,
-        ]
+        values_by_header = {
+            "No": finding.get("id", row_idx - 1),
+            "Page": finding.get("page", "-"),
+            "Section": finding.get("section", "-"),
+            "Evidence": finding.get("evidence", ""),
+            "Comment": finding.get("comment", ""),
+            "Fix": finding.get("fix", ""),
+            "Category": f"{cat_icon} {cat_name}",
+            "Severity": sev_label,
+            "Confidence": _fmt_confidence(finding.get("confidence")),
+            "Fix Type": fix_type,
+            "Date": review_date,
+            "Status": finding_status,
+        }
 
-        for col_idx, value in enumerate(row_data, 1):
+        for col_idx, (header, _width, align) in enumerate(columns, 1):
+            value = values_by_header.get(header, "")
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.font = body_font
             cell.border = border
-            if col_idx in (1, 2, 7, 8, 9, 10):
-                cell.alignment = center_align
-            else:
-                cell.alignment = wrap_align
+            cell.alignment = center_align if align == "center" else wrap_align
 
-            # Apply severity color to severity column
-            if col_idx == 7:
+            if col_idx == sev_col:
                 cell.fill = sev_fill
                 cell.font = Font(name="Calibri", size=10, bold=True)
-
-            # Apply status color to status column
-            if col_idx == 10:
+            if col_idx == status_col:
                 cell.fill = status_fills.get(str(value), PatternFill())
                 cell.font = Font(name="Calibri", size=10, bold=True)
 
     # Add data validation dropdown for Status column
-    status_col_letter = get_column_letter(10)  # Column J = Status
+    status_col_letter = get_column_letter(status_col)
     dv = DataValidation(
         type="list",
         formula1='"OPEN,WORKING,CLOSED,IGNORE,N/A"',

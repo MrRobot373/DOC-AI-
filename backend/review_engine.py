@@ -352,7 +352,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         if progress_callback:
             progress_callback("Checking cross-document consistency & terminology...", 68)
         
-        if review_mode == "pro":
+        if review_mode in ("pro", "max"):
             try:
                 consistency_findings = _review_consistency_with_llm(client, text_model, doc_summary)
                 if consistency_findings:
@@ -367,7 +367,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                 progress_callback("Deep-reviewing tables and data...", 75)
 
             try:
-                if review_mode == "pro":
+                if review_mode in ("pro", "max"):
                     table_findings = _review_tables_with_llm(client, text_model, parsed_doc)
                 elif "UNITS_CALCULATIONS" in active_categories:
                     table_findings = _review_tables_with_llm(client, text_model, parsed_doc, ["UNITS_CALCULATIONS"])
@@ -385,7 +385,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
             if progress_callback:
                 progress_callback(f"Reviewing {total_images} images/diagrams with {img_model}...", 82)
 
-            if review_mode == "pro":
+            if review_mode in ("pro", "max"):
                 image_errors = []
                 try:
                     image_findings = _review_images_with_llm(client, img_model, parsed_doc, doc_summary, progress_callback, errors=image_errors)
@@ -424,6 +424,9 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                 findings = _critic_filter_findings(client, text_model, findings, progress_callback)
             except Exception as e:
                 print(f"Critic pass skipped: {e}")
+        # Max = strictest: keep only high-confidence findings (precision over recall).
+        if review_mode == "max":
+            findings = [f for f in findings if float(f.get("confidence", 1.0)) >= 0.5]
         findings = _deduplicate_findings(findings)
         findings.sort(key=lambda f: SEVERITY_LEVELS.get(f.get("severity", "MINOR"), {}).get("weight", 0), reverse=True)
 
