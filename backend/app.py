@@ -354,6 +354,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
 
         # Run review
         max_mode_findings = None
+        engine_status = {}
         if review_mode == "max":
             if file_type == "excel":
                 raise ValueError("Max mode currently supports Word documents only. Use Normal or Pro for Excel files.")
@@ -368,7 +369,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             max_mode_findings = validate_max_findings(max_mode_findings, parsed)
             findings = _convert_max_findings_for_ui(max_mode_findings)
         else:
-            findings = review_document(client, model, parsed, progress_callback=progress_cb, review_mode=review_mode, vision_model=vision_model)
+            findings = review_document(client, model, parsed, progress_callback=progress_cb, review_mode=review_mode, vision_model=vision_model, status_out=engine_status)
 
         # Generate report
         store = _load_store()
@@ -414,6 +415,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             "report_filename": report_filename,
             "review_mode": review_mode,
             "original_filepath": filepath,
+            "engine_status": engine_status,
             "document_info": {
                 "filename": original_filename,
                 "words": parsed["statistics"]["total_words"],
