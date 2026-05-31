@@ -40,17 +40,15 @@ export default function Dashboard({ user }: DashboardProps) {
     const [hostUrl, setHostUrl] = useState("https://ollama.com")
     const [savingSettings, setSavingSettings] = useState(false)
     const [testResult, setTestResult] = useState<string | null>(null)
-    const [availableModels] = useState<string[]>([
-        "qwen3-vl:235b-cloud",
-        "kimi-k2-thinking:cloud",
-        "kimi-k2.5:cloud",
-        "nemotron-3-super:cloud",
-        "qwen3.5:397b-cloud",
-        "minimax-m2.7:cloud"
-    ])
-    const [selectedModel, setSelectedModel] = useState("nemotron-3-super:cloud")
-    const [visionModel, setVisionModel] = useState("qwen3.5:397b-cloud")
+    // Models are fetched live from the selected Ollama host (never hardcoded),
+    // so users can only pick models that actually exist on their server.
+    const [availableModels, setAvailableModels] = useState<string[]>([])
+    const [loadingModels, setLoadingModels] = useState(false)
+    const [modelsError, setModelsError] = useState<string | null>(null)
+    const [selectedModel, setSelectedModel] = useState("")
+    const [visionModel, setVisionModel] = useState("")
     const [reviewMode, setReviewMode] = useState<"normal" | "pro" | "max">("pro")
+    const [engineWarning, setEngineWarning] = useState<string | null>(null)
 
     // Review State
     const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -81,6 +79,36 @@ export default function Dashboard({ user }: DashboardProps) {
         return () => document.removeEventListener("mousedown", handler)
     }, [])
 
+    // Fetch the live model list from the chosen Ollama host. Picks sensible
+    // defaults for the text and vision models from what actually exists.
+    const fetchModels = async (key: string, host: string) => {
+        if (!key) return
+        setLoadingModels(true)
+        setModelsError(null)
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/models`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ api_key: key, host }),
+            })
+            const data = await resp.json()
+            const models: string[] = Array.isArray(data.models) ? data.models : []
+            if (data.success && models.length) {
+                setAvailableModels(models)
+                setSelectedModel(prev => (prev && models.includes(prev) ? prev : models[0]))
+                const vision = models.find(m => /vl|vision|llava/i.test(m))
+                setVisionModel(prev => (prev && models.includes(prev) ? prev : (vision || models[0])))
+            } else {
+                setAvailableModels([])
+                setModelsError(data.error || "No models returned by this host")
+            }
+        } catch (e: any) {
+            setModelsError(e.message)
+        } finally {
+            setLoadingModels(false)
+        }
+    }
+
     // Load settings on mount
     useEffect(() => {
         const loadSettings = async () => {
@@ -90,8 +118,11 @@ export default function Dashboard({ user }: DashboardProps) {
                 .eq('user_id', user.id)
                 .single()
             if (data) {
-                setApiKey(data.ollama_api_key || "")
-                setHostUrl(data.ollama_host_url || "https://ollama.com")
+                const key = data.ollama_api_key || ""
+                const host = data.ollama_host_url || "https://ollama.com"
+                setApiKey(key)
+                setHostUrl(host)
+                if (key) fetchModels(key, host)
             }
         }
         loadSettings().catch(() => { })
@@ -120,6 +151,17 @@ export default function Dashboard({ user }: DashboardProps) {
 
             if (data.success) {
                 setTestResult("Connection Successful!")
+                // /api/check-ollama returns the live model list — use it directly.
+                const models: string[] = Array.isArray(data.models) ? data.models : []
+                if (models.length) {
+                    setAvailableModels(models)
+                    setSelectedModel(prev => (prev && models.includes(prev) ? prev : models[0]))
+                    const vision = models.find(m => /vl|vision|llava/i.test(m))
+                    setVisionModel(prev => (prev && models.includes(prev) ? prev : (vision || models[0])))
+                    setModelsError(null)
+                } else {
+                    setModelsError("Connected, but no models found on this host.")
+                }
             } else {
                 setTestResult("Error: " + data.error)
             }
@@ -155,7 +197,7 @@ export default function Dashboard({ user }: DashboardProps) {
     }
 
     const handleStartReview = async () => {
-        if (!selectedFile || !apiKey) {
+        if (!selectedFile || !apiKey || !selectedModel) {
             setShowSettingsModal(true)
             return
         }
@@ -165,12 +207,13 @@ export default function Dashboard({ user }: DashboardProps) {
         setProgressPct(5)
         setReportUrl(null)
         setFindings([])
+        setEngineWarning(null)
 
         const formData = new FormData()
         if (user) formData.append('user_id', user.id)
         formData.append('api_key', apiKey)
         formData.append('host', hostUrl)
-        formData.append('model', selectedModel || "gpt-oss:120b-cloud")
+        formData.append('model', selectedModel)
         formData.append('vision_model', visionModel)
         formData.append('review_mode', reviewMode)
         formData.append('document', selectedFile)
@@ -208,6 +251,7 @@ export default function Dashboard({ user }: DashboardProps) {
                         setReportUrl(`${API_BASE_URL}/api/download/${sData.report_filename}`)
                         setReviewId(reviewId)
                         setReviewing(false)
+                        setEngineWarning(sData.engine_status?.warning || null)
 
                         supabase.from('review_history').insert({
                             user_id: user.id,
@@ -398,6 +442,18 @@ export default function Dashboard({ user }: DashboardProps) {
                                 <p className="text-xs text-gray-500">Multiple keys enable automatic failover if one key's quota is exceeded.</p>
                             </div>
 
+                            {loadingModels && (
+                                <p className="text-xs text-gray-500">Loading models from host…</p>
+                            )}
+                            {modelsError && (
+                                <div className="flex items-center gap-2 text-sm px-3 py-2.5 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20">
+                                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                                    {modelsError}
+                                </div>
+                            )}
+                            {availableModels.length === 0 && !loadingModels && (
+                                <p className="text-xs text-gray-500">Click “Test &amp; Save” to load the models available on this host.</p>
+                            )}
                             {availableModels.length > 0 && (
                                 <>
                                     <div className="space-y-2">
@@ -738,6 +794,14 @@ export default function Dashboard({ user }: DashboardProps) {
                         </div>
                     </CardContent>
                 </Card>
+
+                {/* AI pass failure banner — so a bad model/key never looks like a "clean" thin report */}
+                {engineWarning && (
+                    <div className="w-full mt-6 flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+                        <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                        <span>{engineWarning}</span>
+                    </div>
+                )}
 
                 {/* Findings */}
                 {findings.length > 0 && (
