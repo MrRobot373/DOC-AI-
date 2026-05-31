@@ -16,6 +16,7 @@ from flask_cors import CORS
 from supabase import create_client, Client
 
 from doc_parser import parse_document, parse_excel, get_document_summary
+from page_locator import enrich_pages
 from review_engine import (
     create_ollama_client,
     create_failover_client,
@@ -283,6 +284,12 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             parsed = parse_excel(filepath)
         else:
             parsed = parse_document(filepath)
+            # Replace heuristic page numbers with PDF-accurate ones when a
+            # renderer (Gotenberg/LibreOffice) is available; safe no-op otherwise.
+            try:
+                enrich_pages(parsed, filepath)
+            except Exception as e:
+                print(f"Page enrichment skipped: {e}")
         store = _load_store()
         store[review_id].update({
             "progress": 20,

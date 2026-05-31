@@ -5,6 +5,7 @@ openpyxl
 requests
 ollama
 Pillow
+pypdf
 gunicorn
 nltk
 supabase
