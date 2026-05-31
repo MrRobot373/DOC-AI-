@@ -708,19 +708,44 @@ def _check_cross_references(parsed_doc):
         num_match = re.findall(r'Table\s+(\d+[-.]?\d*)', tbl_name, re.IGNORECASE)
         actual_tables.update(num_match)
     
-    # Also scan body text for figure/table captions
+    # Scan paragraphs for captions. Word captions use the "Caption" paragraph
+    # style and SEQ fields (which python-docx renders as "Figure 5" / "Table 3"),
+    # often WITHOUT a trailing ':' or '—'. So we treat a paragraph as a caption
+    # definition when EITHER its style is a caption style OR the label appears at
+    # the very start of the paragraph (the canonical caption position).
+    caption_lead = re.compile(r'^\s*(Figure|Table|Equation)\s+(\d+[-.]?\d*)', re.IGNORECASE)
+    caption_sep = re.compile(r'(Figure|Table|Equation)\s+(\d+[-.]?\d*)\s*[:\-—]', re.IGNORECASE)
+
+    def _record_label(kind, num):
+        kind = kind.lower()
+        if kind == "figure":
+            actual_figures.add(num)
+        elif kind == "table":
+            actual_tables.add(num)
+        elif kind == "equation":
+            actual_equations.add(num)
+
     for section in parsed_doc.get("sections", []):
         for para in section.get("paragraphs", []):
             text = para.get("text", "")
-            # Look for definition patterns like "Figure 5: ..." or "Figure 5 —"
-            fig_defs = re.findall(r'Figure\s+(\d+[-.]?\d*)\s*[:\-—]', text, re.IGNORECASE)
-            actual_figures.update(fig_defs)
-            
-            tbl_defs = re.findall(r'Table\s+(\d+[-.]?\d*)\s*[:\-—]', text, re.IGNORECASE)
-            actual_tables.update(tbl_defs)
-            
-            eq_defs = re.findall(r'Equation\s+(\d+[-.]?\d*)\s*[:\-—]', text, re.IGNORECASE)
-            actual_equations.update(eq_defs)
+            if not text:
+                continue
+            is_caption_style = "caption" in str(para.get("style", "")).lower()
+
+            # Definition with a separator: "Figure 5: ..." anywhere in the line.
+            for kind, num in caption_sep.findall(text):
+                _record_label(kind, num)
+
+            if is_caption_style:
+                # The whole paragraph is a caption — count every label in it.
+                for kind, num in re.findall(r'(Figure|Table|Equation)\s+(\d+[-.]?\d*)', text, re.IGNORECASE):
+                    _record_label(kind, num)
+            else:
+                # A label at the very start of a normal paragraph is the
+                # canonical caption position ("Figure 72 Pin output diagram").
+                lead = caption_lead.match(text)
+                if lead:
+                    _record_label(lead.group(1), lead.group(2))
     
     # Now scan for all references in body text
     ref_pattern = re.compile(r'(?:see\s+|refer\s+to\s+|in\s+|from\s+)?(Figure|Table|Equation|Section)\s+(\d+[-.]?\d*)', re.IGNORECASE)
