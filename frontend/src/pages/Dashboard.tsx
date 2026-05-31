@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
+import DocumentViewer from "@/components/DocumentViewer"
 import {
     LogOut, Settings, UploadCloud, CheckCircle2, AlertTriangle,
     FileText, X, ChevronDown, ExternalLink, MessageSquare, HelpCircle, Send,
-    Check, XCircle, Clock, Download, Zap
+    Check, XCircle, Clock, Download, Zap, Crosshair
 } from "lucide-react"
 
 interface DashboardProps {
@@ -65,6 +66,17 @@ export default function Dashboard({ user }: DashboardProps) {
     const [applyingFixes, setApplyingFixes] = useState(false)
     const [fixedDocUrl, setFixedDocUrl] = useState<string | null>(null)
     const [updatingFindingId, setUpdatingFindingId] = useState<number | null>(null)
+
+    // Side-by-side viewer state (click a finding -> highlight it in the doc)
+    const [viewerHighlight, setViewerHighlight] = useState<string | null>(null)
+    const [highlightNonce, setHighlightNonce] = useState(0)
+    const showDocViewer = fileType === "doc" && !!selectedFile && findings.length > 0
+
+    const handleFindingClick = (f: any) => {
+        if (!showDocViewer) return
+        setViewerHighlight(f.evidence || f.comment || null)
+        setHighlightNonce((n) => n + 1)
+    }
 
     const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -860,12 +872,14 @@ export default function Dashboard({ user }: DashboardProps) {
                             )}
                         </div>
 
-                        {/* Findings List */}
-                        <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                        {/* Findings list + (optional) side-by-side document viewer */}
+                        <div className={`grid gap-4 ${showDocViewer ? 'lg:grid-cols-2 items-start' : ''}`}>
+                        <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
                             {filteredFindings.map((f, i) => (
                                 <div
                                     key={f.id || i}
-                                    className={`border rounded-xl p-4 text-sm transition-all ${
+                                    onClick={() => handleFindingClick(f)}
+                                    className={`border rounded-xl p-4 text-sm transition-all ${showDocViewer ? 'cursor-pointer' : ''} ${
                                         f.status === 'CLOSED' ? 'bg-green-500/[0.03] border-green-500/10 opacity-60'
                                         : f.status === 'IGNORE' || f.status === 'N/A' ? 'bg-white/[0.01] border-white/5 opacity-40'
                                         : f.status === 'WORKING' ? 'bg-yellow-500/[0.03] border-yellow-500/10'
@@ -902,7 +916,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                         </div>
 
                                         {/* Action Buttons */}
-                                        <div className="flex flex-col gap-1.5 min-w-fit">
+                                        <div className="flex flex-col gap-1.5 min-w-fit" onClick={(e) => e.stopPropagation()}>
                                             {f.status === 'OPEN' && (
                                                 <>
                                                     <button
@@ -985,6 +999,15 @@ export default function Dashboard({ user }: DashboardProps) {
                                     )}
                                 </div>
                             ))}
+                        </div>
+                        {showDocViewer && (
+                            <div className="lg:sticky lg:top-20 self-start space-y-2">
+                                <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                                    <Crosshair className="h-3.5 w-3.5" /> Click any finding to locate it in the document.
+                                </p>
+                                <DocumentViewer file={selectedFile} highlight={viewerHighlight} highlightNonce={highlightNonce} />
+                            </div>
+                        )}
                         </div>
                     </div>
                 )}
