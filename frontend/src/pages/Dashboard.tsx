@@ -940,6 +940,15 @@ export default function Dashboard({ user }: DashboardProps) {
                                                     <Zap className="h-2.5 w-2.5" />Auto
                                                 </span>
                                             )}
+                                            {/* Confidence (from the critic pass) */}
+                                            {typeof f.confidence === 'number' && (
+                                                <span
+                                                    className="px-2 py-0.5 bg-white/5 text-gray-400 rounded text-[10px] font-medium"
+                                                    title="Reviewer confidence"
+                                                >
+                                                    {Math.round(f.confidence * 100)}%
+                                                </span>
+                                            )}
                                         </div>
 
                                         {/* Content */}

@@ -201,6 +201,53 @@ def is_vision_model(name):
     return any(h in n for h in VISION_MODEL_HINTS)
 
 
+def load_glossary(path=None):
+    """
+    Load an optional per-project glossary/rules file (JSON). Replaces hardcoded,
+    document-specific rules with config the user controls. Path comes from the
+    arg or the DOCAI_GLOSSARY env var. Returns {} when absent/invalid.
+
+    Expected shape (all keys optional):
+      {
+        "acronyms": {"HVDCDC": "High-Voltage DC-DC converter"},
+        "canonical_terms": ["Use 'Maximum Ratings' (not 'Max Ratings')"],
+        "known_issues": ["A device rating equal to its requirement has no margin"],
+        "notes": "free-form project guidance"
+      }
+    """
+    path = path or os.environ.get("DOCAI_GLOSSARY")
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"[glossary] failed to load {path}: {e}")
+        return {}
+
+
+def format_glossary(glossary):
+    """Render a glossary dict into a prompt block. Empty string when nothing useful."""
+    if not glossary:
+        return ""
+    lines = ["## PROJECT GLOSSARY & RULES (treat as authoritative)"]
+    acronyms = glossary.get("acronyms") or {}
+    if isinstance(acronyms, dict) and acronyms:
+        lines.append("Acronyms / canonical expansions:")
+        lines += [f"- {k}: {v}" for k, v in list(acronyms.items())[:80]]
+    for key, header in (("canonical_terms", "Preferred terminology"),
+                        ("known_issues", "Known issue patterns to watch for")):
+        items = glossary.get(key) or []
+        if isinstance(items, list) and items:
+            lines.append(f"{header}:")
+            lines += [f"- {str(it)}" for it in items[:80]]
+    notes = glossary.get("notes")
+    if notes:
+        lines.append(f"Notes: {notes}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def create_ollama_client(api_key, host="https://ollama.com"):
     """
     Create an Ollama client. Sends a Bearer token only when an API key is given,
@@ -330,6 +377,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         from doc_parser import get_document_summary, get_section_chunks
 
         doc_summary = get_document_summary(parsed_doc)
+        glossary_text = format_glossary(load_glossary())
         chunks = get_section_chunks(parsed_doc, max_chars=5000)
         total_chunks = len(chunks)
 
@@ -343,7 +391,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                 progress_callback(f"AI Pass: Analyzing chunk {i + 1}/{total_chunks}...", pct)
 
             try:
-                chunk_findings = _review_chunk_multipass(client, text_model, chunk, doc_summary, i + 1, active_categories)
+                chunk_findings = _review_chunk_multipass(client, text_model, chunk, doc_summary, i + 1, active_categories, glossary_text)
                 if chunk_findings:
                     findings.extend(chunk_findings)
                 chunk_count += 1
@@ -369,7 +417,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         
         if review_mode in ("pro", "max"):
             try:
-                consistency_findings = _review_consistency_with_llm(client, text_model, doc_summary)
+                consistency_findings = _review_consistency_with_llm(client, text_model, doc_summary, glossary_text)
                 if consistency_findings:
                     findings.extend(consistency_findings)
                 _record("consistency", True, count=len(consistency_findings))
@@ -1023,15 +1071,16 @@ def _check_orphan_references(parsed_doc):
 # ============================================================
 # LLM-POWERED REVIEW FUNCTIONS
 # ============================================================
-def _review_chunk_multipass(client, model, chunk_text, doc_summary, chunk_num, active_categories):
+def _review_chunk_multipass(client, model, chunk_text, doc_summary, chunk_num, active_categories, glossary_text=""):
     """
     Enhanced chunk review with focused, detailed prompt.
     Combines text quality + technical accuracy in one focused pass per chunk.
     """
     cat_list = "\n".join([
-        f"- {cid}: {REVIEW_CATEGORIES[cid]['name']} — {REVIEW_CATEGORIES[cid]['description']}" 
+        f"- {cid}: {REVIEW_CATEGORIES[cid]['name']} — {REVIEW_CATEGORIES[cid]['description']}"
         for cid in active_categories if cid in REVIEW_CATEGORIES
     ])
+    glossary_block = f"\n{glossary_text}\n" if glossary_text else ""
 
     prompt = f"""You are an expert senior technical document reviewer for automotive/embedded systems engineering.
 You are reviewing a Hardware Design Document (HDD), WCCA report, or SCTM for a commercial product.
@@ -1062,7 +1111,7 @@ Your job is to find EVERY real issue. You must be thorough but precise — only 
 
 ## Review Categories to use:
 {cat_list}
-
+{glossary_block}
 ## Document Context:
 {doc_summary[:2000]}
 
@@ -1095,11 +1144,12 @@ If no issues found, return [].
     return _chat_findings(client, model, prompt, f"llm_chunk_{chunk_num}")
 
 
-def _review_consistency_with_llm(client, model, doc_summary):
+def _review_consistency_with_llm(client, model, doc_summary, glossary_text=""):
     """Check cross-document consistency issues with enhanced prompts."""
 
+    glossary_block = f"\n{glossary_text}\n" if glossary_text else ""
     prompt = f"""You are a senior technical document reviewer. Analyze the overall structure and consistency of this document.
-
+{glossary_block}
 ## Full Document Summary:
 {doc_summary[:8000]}
 
