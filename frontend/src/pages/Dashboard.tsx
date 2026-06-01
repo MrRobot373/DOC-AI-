@@ -7,10 +7,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import DocumentViewer from "@/components/DocumentViewer"
+import AdminPanel from "@/components/AdminPanel"
 import {
     LogOut, Settings, UploadCloud, CheckCircle2, AlertTriangle,
     FileText, X, ChevronDown, ExternalLink, MessageSquare, HelpCircle, Send,
-    Check, XCircle, Clock, Download, Zap, Crosshair
+    Check, XCircle, Clock, Download, Zap, Crosshair, Shield
 } from "lucide-react"
 
 interface DashboardProps {
@@ -54,9 +55,14 @@ export default function Dashboard({ user }: DashboardProps) {
 
     const LOCAL_OLLAMA = "http://localhost:11434"
     const CLOUD_OLLAMA = "https://ollama.com"
+    const FREELLMAPI_HOST = "http://localhost:3001"
     const isLocalHost = (h: string) => /localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal/i.test(h || "")
     const runtimeIsLocal = isLocalHost(hostUrl)
-    const keyOk = runtimeIsLocal || !!apiKey
+
+    // "Auto" mode draws from the admin's shared key pool — no host/key/model needed.
+    const [usePool, setUsePool] = useState(false)
+    // Key is OK if: pool mode, local host, or a key is present.
+    const keyOk = usePool || runtimeIsLocal || !!apiKey
 
     // Known Ollama Cloud models — pre-populated so the dropdowns work immediately
     // without needing a Test & Save round-trip. Best for technical doc analysis:
@@ -107,10 +113,19 @@ export default function Dashboard({ user }: DashboardProps) {
     const [viewerTargetPage, setViewerTargetPage] = useState<number | undefined>(undefined)
     const [viewerAuthToken, setViewerAuthToken] = useState<string | undefined>(undefined)
 
-    // Grab the current session token once for the viewer.
+    // Admin panel
+    const [isAdmin, setIsAdmin] = useState(false)
+    const [showAdminPanel, setShowAdminPanel] = useState(false)
+
+    // Grab the current session token once for the viewer + check admin status.
     useEffect(() => {
         supabase.auth.getSession().then(({ data }) => {
-            setViewerAuthToken(data?.session?.access_token || undefined)
+            const token = data?.session?.access_token
+            setViewerAuthToken(token || undefined)
+            if (token) {
+                fetch(`${API_BASE_URL}/api/admin/whoami`, { headers: { Authorization: `Bearer ${token}` } })
+                    .then(r => r.json()).then(d => setIsAdmin(!!d.is_admin)).catch(() => {})
+            }
         })
     }, [])
 
@@ -197,6 +212,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 setHostUrl(host)
                 if (data.selected_model) setSelectedModel(data.selected_model)
                 if (data.vision_model) setVisionModel(data.vision_model)
+                if (data.use_pool) setUsePool(true)
                 if (key || isLocalHost(host)) fetchModels(key, host)
             }
         }
@@ -222,7 +238,8 @@ export default function Dashboard({ user }: DashboardProps) {
                 user_id: user.id,
                 ollama_api_key: apiKey,
                 ollama_host_url: hostUrl,
-                ollama_runtime: runtimeIsLocal ? 'local' : 'cloud',
+                ollama_runtime: usePool ? 'auto' : (runtimeIsLocal ? 'local' : 'cloud'),
+                use_pool: usePool,
                 selected_model: selectedModel,
                 vision_model: visionModel,
             })
@@ -280,7 +297,8 @@ export default function Dashboard({ user }: DashboardProps) {
     }
 
     const handleStartReview = async () => {
-        if (!selectedFile || !selectedModel || !keyOk) {
+        // In Auto (pool) mode the model comes from the admin pool, so it's optional here.
+        if (!selectedFile || (!selectedModel && !usePool) || !keyOk) {
             setShowSettingsModal(true)
             return
         }
@@ -296,7 +314,7 @@ export default function Dashboard({ user }: DashboardProps) {
         if (user) formData.append('user_id', user.id)
         formData.append('api_key', apiKey)
         formData.append('host', hostUrl)
-        formData.append('model', selectedModel)
+        formData.append('model', selectedModel || 'auto')
         formData.append('vision_model', visionModel)
         formData.append('review_mode', reviewMode)
         formData.append('document', selectedFile)
@@ -450,6 +468,15 @@ export default function Dashboard({ user }: DashboardProps) {
                                     <p className="text-xs text-gray-500 mt-0.5">Signed in</p>
                                 </div>
                                 <div className="p-1.5">
+                                    {isAdmin && (
+                                        <button
+                                            onClick={() => { setShowProfileMenu(false); setShowAdminPanel(true) }}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-amber-400 hover:bg-amber-500/10 transition-colors"
+                                        >
+                                            <Shield className="h-4 w-4" />
+                                            Admin Panel
+                                        </button>
+                                    )}
                                     <button
                                         onClick={() => { setShowProfileMenu(false); setShowSettingsModal(true) }}
                                         className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors"
@@ -486,6 +513,11 @@ export default function Dashboard({ user }: DashboardProps) {
                 </div>
             </header>
 
+            {/* ─── Admin Panel ─── */}
+            {showAdminPanel && (
+                <AdminPanel apiBase={API_BASE_URL} onClose={() => setShowAdminPanel(false)} />
+            )}
+
             {/* ─── Settings Modal / Popup ─── */}
             {showSettingsModal && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowSettingsModal(false)}>
@@ -511,28 +543,35 @@ export default function Dashboard({ user }: DashboardProps) {
 
                         {/* Modal Body */}
                         <div className="px-6 py-5 space-y-5">
-                            {/* Runtime: Local (private, on-device) vs Cloud */}
+                            {/* Runtime: Local / Cloud / FreeLLMAPI / Auto (shared pool) */}
                             <div className="space-y-2">
-                                <Label className="text-gray-300 text-sm">Ollama Runtime</Label>
-                                <div className="flex bg-white/5 p-1 rounded-lg border border-white/10 w-fit">
-                                    <button
-                                        type="button"
-                                        onClick={() => setHostUrl(LOCAL_OLLAMA)}
-                                        className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${runtimeIsLocal ? "bg-white text-black" : "text-gray-400 hover:text-white"}`}
-                                    >
-                                        Local (private)
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setHostUrl(CLOUD_OLLAMA)}
-                                        className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${!runtimeIsLocal ? "bg-white text-black" : "text-gray-400 hover:text-white"}`}
-                                    >
-                                        Cloud
-                                    </button>
+                                <Label className="text-gray-300 text-sm">LLM Runtime</Label>
+                                <div className="flex flex-wrap bg-white/5 p-1 rounded-lg border border-white/10 w-fit gap-1">
+                                    {[
+                                        { id: "local", label: "Local (private)", onClick: () => { setUsePool(false); setHostUrl(LOCAL_OLLAMA) } },
+                                        { id: "cloud", label: "Cloud", onClick: () => { setUsePool(false); setHostUrl(CLOUD_OLLAMA) } },
+                                        { id: "freellmapi", label: "FreeLLMAPI", onClick: () => { setUsePool(false); setHostUrl(FREELLMAPI_HOST) } },
+                                        { id: "auto", label: "Auto (pool)", onClick: () => setUsePool(true) },
+                                    ].map(opt => {
+                                        const active = opt.id === "auto" ? usePool
+                                            : !usePool && (opt.id === "local" ? runtimeIsLocal && hostUrl === LOCAL_OLLAMA
+                                                : opt.id === "freellmapi" ? hostUrl.includes(":3001")
+                                                : hostUrl === CLOUD_OLLAMA)
+                                        return (
+                                            <button key={opt.id} type="button" onClick={opt.onClick}
+                                                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${active ? "bg-white text-black" : "text-gray-400 hover:text-white"}`}>
+                                                {opt.label}
+                                            </button>
+                                        )
+                                    })}
                                 </div>
                                 <p className="text-xs text-gray-500">
-                                    {runtimeIsLocal
+                                    {usePool
+                                        ? "Auto mode: uses the shared key pool managed by your admin. Just pick a model name (or leave default)."
+                                        : runtimeIsLocal
                                         ? "Documents never leave this machine/network. No API key required."
+                                        : hostUrl.includes(":3001")
+                                        ? "FreeLLMAPI aggregator (16 free provider tiers behind one endpoint)."
                                         : "Uses ollama.com. Requires an API key. Documents are sent to the cloud."}
                                 </p>
                             </div>
