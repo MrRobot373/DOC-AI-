@@ -161,12 +161,12 @@ VERDICTS_JSON_SCHEMA = {
 }
 
 
-def _llm_options(num_predict=4096):
+def _llm_options(num_predict=4096, seed=None):
     """Standard deterministic options for every findings-generating chat call."""
-    return {"temperature": 0, "seed": LLM_SEED, "num_predict": num_predict}
+    return {"temperature": 0, "seed": seed if seed is not None else LLM_SEED, "num_predict": num_predict}
 
 
-def _chat_findings(client, model, prompt, source, images=None, num_predict=4096):
+def _chat_findings(client, model, prompt, source, images=None, num_predict=4096, seed=None):
     """
     Single entry point for every findings-producing LLM call.
 
@@ -182,7 +182,7 @@ def _chat_findings(client, model, prompt, source, images=None, num_predict=4096)
         model=model,
         messages=[message],
         format=FINDINGS_JSON_SCHEMA,
-        options=_llm_options(num_predict),
+        options=_llm_options(num_predict, seed=seed),
     )
     reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
     return _parse_llm_findings(reply, source)
@@ -417,7 +417,15 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                 progress_callback(f"AI Pass: Analyzing chunk {i + 1}/{total_chunks}...", pct)
 
             try:
-                chunk_findings = _review_chunk_multipass(client, text_model, chunk, doc_summary, i + 1, active_categories, glossary_text)
+                # B3 ensemble: in max mode, sample each chunk twice (two seeds) and
+                # union. Grounding + dedupe downstream remove the extra hallucinations
+                # the second sample introduces, so recall rises without FP inflation.
+                seeds = [LLM_SEED, 137] if review_mode == "max" else [LLM_SEED]
+                chunk_findings = []
+                for sd in seeds:
+                    chunk_findings.extend(
+                        _review_chunk_multipass(client, text_model, chunk, doc_summary, i + 1, active_categories, glossary_text, seed=sd)
+                    )
                 if chunk_findings:
                     findings.extend(chunk_findings)
                 chunk_count += 1
@@ -449,6 +457,30 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                 _record("consistency", True, count=len(consistency_findings))
             except Exception as e:
                 _record("consistency", False, error=str(e))
+
+        # ── B2: Category-specialized deep passes (max mode) ──
+        # Focused prompts (units-only, terminology-only) get higher recall per
+        # domain than the general chunk pass. Gated to max while validating.
+        if review_mode == "max":
+            if progress_callback:
+                progress_callback("Max: focused units & calculations pass...", 70)
+            try:
+                units_findings = _review_units_pass(client, text_model, parsed_doc, glossary_text)
+                if units_findings:
+                    findings.extend(units_findings)
+                _record("units_pass", True, count=len(units_findings))
+            except Exception as e:
+                _record("units_pass", False, error=str(e))
+
+            if progress_callback:
+                progress_callback("Max: focused terminology & naming pass...", 72)
+            try:
+                term_findings = _review_terminology_pass(client, text_model, parsed_doc, glossary_text)
+                if term_findings:
+                    findings.extend(term_findings)
+                _record("terminology_pass", True, count=len(term_findings))
+            except Exception as e:
+                _record("terminology_pass", False, error=str(e))
 
         # ── STEP 4: Table-specific review (LLM) ──
         if parsed_doc.get("tables"):
@@ -1141,7 +1173,7 @@ def _cache_put(key, findings):
         pass
 
 
-def _review_chunk_multipass(client, model, chunk_text, doc_summary, chunk_num, active_categories, glossary_text=""):
+def _review_chunk_multipass(client, model, chunk_text, doc_summary, chunk_num, active_categories, glossary_text="", seed=None):
     """
     Enhanced chunk review with focused, detailed prompt.
     Combines text quality + technical accuracy in one focused pass per chunk.
@@ -1212,14 +1244,14 @@ If no issues found, return [].
 
     # Content-addressed cache: identical (model, chunk, categories, glossary) →
     # identical findings with no LLM call. Opt-in via DOCAI_CACHE_DIR.
-    cache_key = _cache_key("chunk", model, chunk_text, ",".join(active_categories), glossary_text)
+    cache_key = _cache_key("chunk", model, chunk_text, ",".join(active_categories), glossary_text, seed)
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
     # Deterministic, schema-constrained call. Errors propagate to the
     # orchestrator so they can be recorded as a per-pass failure (not swallowed).
-    findings = _chat_findings(client, model, prompt, f"llm_chunk_{chunk_num}")
+    findings = _chat_findings(client, model, prompt, f"llm_chunk_{chunk_num}", seed=seed)
     _cache_put(cache_key, findings)
     return findings
 
@@ -1279,6 +1311,73 @@ Return ONLY the JSON array. If no issues, return [].
 """
 
     return _chat_findings(client, model, prompt, "llm_consistency")
+
+
+# ============================================================
+# CATEGORY-SPECIALIZED PASSES (B2) — focused prompts, higher recall per domain
+# ============================================================
+_UNIT_TOKENS = ("V", "mV", "kV", "A", "mA", "uA", "µA", "W", "mW", "kW",
+                "Hz", "kHz", "MHz", "GHz", "Ω", "kΩ", "MΩ", "°C", "°",
+                "uF", "µF", "nF", "pF", "nH", "uH", "µH", "mH", "%", "ppm", "dB", "ns", "us", "µs", "ms")
+
+
+def _review_units_pass(client, model, parsed_doc, glossary_text=""):
+    """Focused pass — ONLY units, calculations, and dimensional consistency."""
+    parts = []
+    for tbl in parsed_doc.get("tables", []):
+        name = tbl.get("name", f"Table {tbl.get('index', 0) + 1}")
+        rows = "\n".join("  " + " | ".join(c[:120] for c in row) for row in tbl.get("rows", []))
+        parts.append(f"[{name}]\n{rows}")
+    for section in parsed_doc.get("sections", []):
+        for para in section.get("paragraphs", []):
+            t = para.get("text", "")
+            if re.search(r"\d", t) and any(u in t for u in _UNIT_TOKENS):
+                parts.append(t)
+    context = "\n".join(parts)
+    if not context.strip():
+        return []
+    glossary_block = f"\n{glossary_text}\n" if glossary_text else ""
+    prompt = f"""You are an electronics/power-engineering reviewer. Focus EXCLUSIVELY on UNITS, CALCULATIONS, and DIMENSIONAL CONSISTENCY. Ignore grammar, formatting, and everything else.
+{glossary_block}
+Find ONLY:
+- Dimensionally invalid statements (e.g. "T = 180 kHz = 12.5 us" — a frequency equated to a time)
+- Calculation errors / results that don't follow from the inputs
+- Values missing a unit where one is required
+- Inconsistent units for the same quantity (e.g. mixing mA and A in one series)
+- Impossible / out-of-range values (negative resistance, efficiency > 100%, etc.)
+
+## Numeric content from the document:
+{context[:30000]}
+
+Return ONLY a JSON array. Every finding MUST include an exact `evidence` quote.
+[{{"category":"UNITS_CALCULATIONS","severity":"CRITICAL|MAJOR|MINOR","page":"-","section":"...","comment":"what is wrong and why","fix":"...","fix_type":"MANUAL","evidence":"exact text"}}]
+If none, return [].
+"""
+    return _chat_findings(client, model, prompt, "llm_units")
+
+
+def _review_terminology_pass(client, model, parsed_doc, glossary_text=""):
+    """Focused pass — ONLY terminology consistency and signal/pin naming drift."""
+    raw_text = parsed_doc.get("raw_text", "")
+    if not raw_text.strip():
+        return []
+    glossary_block = f"\n{glossary_text}\n" if glossary_text else ""
+    prompt = f"""You are a technical-document reviewer. Focus EXCLUSIVELY on TERMINOLOGY and SIGNAL/PIN NAMING. Ignore grammar, units, and formatting.
+{glossary_block}
+Find ONLY:
+- The same thing called different names (e.g. "HVDCDC" vs "HV DCDC" vs "HVDC"; "VDD" vs "VCC" for one rail)
+- Signal/pin/component names spelled differently across the document (e.g. "OUTAL" vs "OUT_AL")
+- Acronyms used before they are defined
+- Part numbers referenced inconsistently
+
+## Document text:
+{raw_text[:40000]}
+
+Return ONLY a JSON array. Every finding MUST include an exact `evidence` quote showing BOTH variants where possible.
+[{{"category":"TERMINOLOGY_CONSISTENCY","severity":"MAJOR|MINOR","page":"-","section":"...","comment":"which terms conflict","fix":"...","fix_type":"MANUAL","evidence":"exact text"}}]
+If none, return [].
+"""
+    return _chat_findings(client, model, prompt, "llm_terminology")
 
 
 def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
