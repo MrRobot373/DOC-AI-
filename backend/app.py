@@ -189,6 +189,20 @@ def _user_uses_pool(user_id):
         return False
 
 
+def _user_notify_email(user_id):
+    """Return the user's email if they opted into completion emails, else None."""
+    if not supabase or not user_id:
+        return None
+    try:
+        s = supabase.table("user_settings").select("notify_email").eq("user_id", user_id).single().execute()
+        if not (s.data and s.data.get("notify_email")):
+            return None
+        u = supabase.auth.admin.get_user_by_id(user_id)
+        return u.user.email if u and u.user else None
+    except Exception:
+        return None
+
+
 def _get_pool_key():
     """Pick the highest-priority active key from the shared pool. None if empty."""
     if not supabase:
@@ -578,6 +592,19 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         _save_store(store)
         _supabase_upsert_review(review_id, user_id, store[review_id])
 
+        # Audit + optional completion email
+        _log_audit(user_id, None, "review_done", review_id,
+                   {"findings": len(findings), "mode": review_mode})
+        try:
+            notify_to = _user_notify_email(user_id)
+            if notify_to:
+                from notifier import send_review_complete_email
+                app_url = os.environ.get("APP_URL", "")
+                link = f"{app_url}/dashboard?review={review_id}" if app_url else None
+                send_review_complete_email(notify_to, original_filename, store[review_id].get("summary"), link)
+        except Exception as e:
+            print(f"Notify skipped: {e}")
+
     except Exception as e:
         store = _load_store()
         if review_id in store:
@@ -585,6 +612,14 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             store[review_id].update(err_update)
             _save_store(store)
             _supabase_upsert_review(review_id, user_id, err_update)
+        _log_audit(user_id, None, "review_error", review_id, {"error": str(e)})
+        try:
+            notify_to = _user_notify_email(user_id)
+            if notify_to:
+                from notifier import send_review_error_email
+                send_review_error_email(notify_to, original_filename, str(e))
+        except Exception:
+            pass
     finally:
         # Keep uploaded file for 24h for potential auto-fix application
         # Schedule cleanup after 24h instead of immediate deletion
@@ -654,6 +689,7 @@ def start_review():
         daemon=True,
     )
     thread.start()
+    _log_audit(user_id, None, "review_start", review_id, {"file": file.filename, "mode": review_mode})
 
     return jsonify({"success": True, "review_id": review_id})
 

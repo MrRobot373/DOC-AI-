@@ -61,6 +61,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
     // "Auto" mode draws from the admin's shared key pool — no host/key/model needed.
     const [usePool, setUsePool] = useState(false)
+    const [notifyEmail, setNotifyEmail] = useState(false)
     // Key is OK if: pool mode, local host, or a key is present.
     const keyOk = usePool || runtimeIsLocal || !!apiKey
 
@@ -213,6 +214,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 if (data.selected_model) setSelectedModel(data.selected_model)
                 if (data.vision_model) setVisionModel(data.vision_model)
                 if (data.use_pool) setUsePool(true)
+                if (data.notify_email) setNotifyEmail(true)
                 if (key || isLocalHost(host)) fetchModels(key, host)
             }
         }
@@ -240,6 +242,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 ollama_host_url: hostUrl,
                 ollama_runtime: usePool ? 'auto' : (runtimeIsLocal ? 'local' : 'cloud'),
                 use_pool: usePool,
+                notify_email: notifyEmail,
                 selected_model: selectedModel,
                 vision_model: visionModel,
             })
@@ -645,6 +648,17 @@ export default function Dashboard({ user }: DashboardProps) {
                                     </div>
                                 </>
                             )}
+
+                            {/* Email notification opt-in */}
+                            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={notifyEmail}
+                                    onChange={e => setNotifyEmail(e.target.checked)}
+                                    className="h-4 w-4 rounded border-white/20 bg-white/[0.03]"
+                                />
+                                Email me when a review completes
+                            </label>
 
                             {testResult && (
                                 <div className={`flex items-center gap-2 text-sm px-3 py-2.5 rounded-lg ${testResult.includes("Error") ? "bg-red-500/10 text-red-400 border border-red-500/20" : "bg-green-500/10 text-green-400 border border-green-500/20"}`}>
