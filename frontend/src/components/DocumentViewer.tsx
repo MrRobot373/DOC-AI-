@@ -147,7 +147,9 @@ export default function DocumentViewer({
             .catch(() => {
                 container.innerHTML = '<p style="color:#888;padding:1rem">Preview unavailable.</p>'
             })
-    }, [file, usePdf])
+    // Re-run when pdfLoading settles (the container is always mounted now, but
+    // we need to re-render the docx whenever the PDF fetch finishes and usePdf stays false).
+    }, [file, usePdf, pdfLoading])
 
     // Jump to target page in the PDF viewer.
     useEffect(() => {
@@ -208,12 +210,7 @@ export default function DocumentViewer({
 
             {/* viewer area */}
             <div className="overflow-auto flex-1">
-                {pdfLoading && (
-                    <div className="flex items-center justify-center h-32 gap-2 text-gray-500 text-sm">
-                        <Loader2 className="h-4 w-4 animate-spin" /> Loading PDF…
-                    </div>
-                )}
-
+                {/* PDF viewer — shown when a rendered PDF is available */}
                 {usePdf && pdfUrl ? (
                     <div ref={pdfContainerRef} className="flex justify-center py-3 bg-[#1a1a2e]">
                         <Document
@@ -221,7 +218,7 @@ export default function DocumentViewer({
                             onLoadSuccess={({ numPages: n }) => setNumPages(n)}
                             loading={
                                 <div className="flex items-center gap-2 p-8 text-gray-500 text-sm">
-                                    <Loader2 className="h-4 w-4 animate-spin" /> Rendering…
+                                    <Loader2 className="h-4 w-4 animate-spin" /> Rendering PDF…
                                 </div>
                             }
                         >
@@ -234,12 +231,22 @@ export default function DocumentViewer({
                             />
                         </Document>
                     </div>
-                ) : !pdfLoading ? (
-                    <div
-                        ref={docxContainerRef}
-                        className="docx-viewer bg-white text-black p-4 text-sm"
-                    />
                 ) : null}
+
+                {/* DOCX preview — ALWAYS mounted so docx-preview never loses its container.
+                    Visible only when not using the PDF viewer. Waiting for the PDF fetch
+                    (pdfLoading) shows a subtle spinner overlay instead of unmounting. */}
+                <div
+                    ref={docxContainerRef}
+                    className="docx-viewer bg-white text-black p-4 text-sm"
+                    style={{ display: usePdf && pdfUrl ? "none" : "block" }}
+                >
+                    {pdfLoading && (
+                        <div className="flex items-center justify-center h-16 gap-2 text-gray-400 text-xs">
+                            <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     )
