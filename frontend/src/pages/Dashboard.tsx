@@ -8,10 +8,11 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import DocumentViewer from "@/components/DocumentViewer"
 import AdminPanel from "@/components/AdminPanel"
+import HistoryPanel from "@/components/HistoryPanel"
 import {
     LogOut, Settings, UploadCloud, CheckCircle2, AlertTriangle,
     FileText, X, ChevronDown, ExternalLink, MessageSquare, HelpCircle, Send,
-    Check, XCircle, Clock, Download, Zap, Crosshair, Shield
+    Check, XCircle, Clock, Download, Zap, Crosshair, Shield, History
 } from "lucide-react"
 
 interface DashboardProps {
@@ -54,6 +55,7 @@ export default function Dashboard({ user }: DashboardProps) {
     const [engineWarning, setEngineWarning] = useState<string | null>(null)
     const [availableStandards, setAvailableStandards] = useState<{ id: string; name: string }[]>([])
     const [selectedStandards, setSelectedStandards] = useState<string[]>([])
+    const [confidenceThreshold, setConfidenceThreshold] = useState(0)  // 0–100; hide findings below
 
     const LOCAL_OLLAMA = "http://localhost:11434"
     const CLOUD_OLLAMA = "https://ollama.com"
@@ -119,6 +121,7 @@ export default function Dashboard({ user }: DashboardProps) {
     // Admin panel
     const [isAdmin, setIsAdmin] = useState(false)
     const [showAdminPanel, setShowAdminPanel] = useState(false)
+    const [showHistory, setShowHistory] = useState(false)
 
     // Load the available standards rule-packs once.
     useEffect(() => {
@@ -376,7 +379,8 @@ export default function Dashboard({ user }: DashboardProps) {
                         supabase.from('review_history').insert({
                             user_id: user.id,
                             document_name: selectedFile.name,
-                            report_filename: sData.report_filename
+                            report_filename: sData.report_filename,
+                            review_id: reviewId,
                         }).then()
                     } else {
                         setProgressMsg(sData.message || "Processing...")
@@ -443,9 +447,9 @@ export default function Dashboard({ user }: DashboardProps) {
     // Computed stats
     const resolvedCount = findings.filter(f => f.status === 'CLOSED' || f.status === 'IGNORE' || f.status === 'N/A').length
     const autoFixableCount = findings.filter(f => f.fix_type === 'AUTO' && f.status === 'OPEN').length
-    const filteredFindings = statusFilter === 'ALL' 
-        ? findings 
-        : findings.filter(f => f.status === statusFilter)
+    const filteredFindings = findings
+        .filter(f => statusFilter === 'ALL' || f.status === statusFilter)
+        .filter(f => (typeof f.confidence === 'number' ? f.confidence : 1) >= confidenceThreshold / 100)
 
     // Get user initials
     const initials = user.email
@@ -501,6 +505,13 @@ export default function Dashboard({ user }: DashboardProps) {
                                         API Configuration
                                     </button>
                                     <button
+                                        onClick={() => { setShowProfileMenu(false); setShowHistory(true) }}
+                                        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors"
+                                    >
+                                        <History className="h-4 w-4" />
+                                        Review History
+                                    </button>
+                                    <button
                                         onClick={() => { setShowProfileMenu(false); setShowFeedbackModal(true); setFeedbackSent(false); setFeedbackText(""); setFeedbackImage(null); }}
                                         className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors"
                                     >
@@ -532,6 +543,11 @@ export default function Dashboard({ user }: DashboardProps) {
             {/* ─── Admin Panel ─── */}
             {showAdminPanel && (
                 <AdminPanel apiBase={API_BASE_URL} onClose={() => setShowAdminPanel(false)} />
+            )}
+
+            {/* ─── Review History + Version Compare ─── */}
+            {showHistory && (
+                <HistoryPanel apiBase={API_BASE_URL} userId={user.id} onClose={() => setShowHistory(false)} />
             )}
 
             {/* ─── Settings Modal / Popup ─── */}
@@ -1049,6 +1065,18 @@ export default function Dashboard({ user }: DashboardProps) {
                                     </button>
                                 ))}
                             </div>
+                        </div>
+
+                        {/* Confidence threshold slider */}
+                        <div className="flex items-center gap-3 text-xs text-gray-400">
+                            <span className="whitespace-nowrap">Min confidence: {confidenceThreshold}%</span>
+                            <input
+                                type="range" min={0} max={100} step={5}
+                                value={confidenceThreshold}
+                                onChange={e => setConfidenceThreshold(parseInt(e.target.value))}
+                                className="w-40 accent-blue-500"
+                            />
+                            <span className="text-gray-600">{filteredFindings.length} of {findings.length} shown</span>
                         </div>
 
                         {/* Batch Actions */}
