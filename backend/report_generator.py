@@ -254,3 +254,79 @@ def generate_excel_report(findings, doc_filename, output_path):
     # Save
     wb.save(output_path)
     return output_path
+
+
+def generate_batch_report(per_doc, cross_findings, output_path):
+    """
+    Combined Excel report for a suite review.
+
+    per_doc: list of {"name": str, "findings": [..]}
+    cross_findings: list of cross-document findings
+    Sheets: Combined Summary | Cross-Document | one sheet per document.
+    """
+    wb = Workbook()
+    header_font = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
+    header_fill = PatternFill(start_color="1a1a2e", end_color="1a1a2e", fill_type="solid")
+    border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                    top=Side(style="thin"), bottom=Side(style="thin"))
+    wrap = Alignment(vertical="top", wrap_text=True)
+
+    # ---- Combined Summary ----
+    ws = wb.active
+    ws.title = "Combined Summary"
+    ws.cell(row=1, column=1, value="DOC-AI Suite Review").font = Font(bold=True, size=14, color="1a1a2e")
+    ws.cell(row=2, column=1, value=f"Generated: {datetime.now():%Y-%m-%d %H:%M}").font = Font(italic=True, size=10, color="666666")
+    headers = ["Document", "Total", "Critical", "Major", "Minor"]
+    for c, h in enumerate(headers, 1):
+        cell = ws.cell(row=4, column=c, value=h)
+        cell.font = header_font; cell.fill = header_fill; cell.border = border
+    row = 5
+    for d in per_doc:
+        counts = {"CRITICAL": 0, "MAJOR": 0, "MINOR": 0}
+        for f in d["findings"]:
+            counts[f.get("severity", "MINOR")] = counts.get(f.get("severity", "MINOR"), 0) + 1
+        for c, v in enumerate([d["name"], len(d["findings"]), counts["CRITICAL"], counts["MAJOR"], counts["MINOR"]], 1):
+            ws.cell(row=row, column=c, value=v).border = border
+        row += 1
+    ws.cell(row=row, column=1, value="Cross-Document").border = border
+    ws.cell(row=row, column=2, value=len(cross_findings)).border = border
+    for col, width in zip("ABCDE", [42, 10, 10, 10, 10]):
+        ws.column_dimensions[col].width = width
+
+    # ---- Cross-Document sheet ----
+    wsx = wb.create_sheet("Cross-Document")
+    _write_findings_sheet(wsx, cross_findings, header_font, header_fill, border, wrap)
+
+    # ---- Per-document sheets ----
+    used = set()
+    for d in per_doc:
+        safe = "".join(ch for ch in d["name"] if ch not in "\/*?:[]")[:28] or "Doc"
+        title, n = safe, 1
+        while title in used:
+            title = f"{safe[:25]}_{n}"; n += 1
+        used.add(title)
+        wsd = wb.create_sheet(title)
+        _write_findings_sheet(wsd, d["findings"], header_font, header_fill, border, wrap)
+
+    wb.save(output_path)
+    return output_path
+
+
+def _write_findings_sheet(ws, findings, header_font, header_fill, border, wrap):
+    cols = ["Severity", "Category", "Page", "Section", "Comment", "Evidence", "Fix"]
+    for c, h in enumerate(cols, 1):
+        cell = ws.cell(row=1, column=c, value=h)
+        cell.font = header_font; cell.fill = header_fill; cell.border = border
+    for r, f in enumerate(findings, 2):
+        cat = REVIEW_CATEGORIES.get(f.get("category", ""), {})
+        vals = [
+            SEVERITY_LEVELS.get(f.get("severity", "MINOR"), {}).get("label", f.get("severity", "")),
+            f"{cat.get('icon', '')} {cat.get('name', f.get('category', ''))}",
+            f.get("page", "-"), f.get("section", "-"),
+            f.get("comment", ""), f.get("evidence", ""), f.get("fix", ""),
+        ]
+        for c, v in enumerate(vals, 1):
+            cell = ws.cell(row=r, column=c, value=v)
+            cell.border = border; cell.alignment = wrap
+    for col, width in zip("ABCDEFG", [12, 22, 8, 18, 50, 35, 40]):
+        ws.column_dimensions[col].width = width

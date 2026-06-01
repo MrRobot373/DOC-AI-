@@ -30,6 +30,24 @@ services:
       - "3000:3000"
     restart: unless-stopped
 
+  # FreeLLMAPI — aggregates ~16 free LLM provider tiers behind one OpenAI-compatible
+  # endpoint. Add your provider keys at http://localhost:3001 after first start.
+  # DOC-AI talks to it via the OpenAI-compatible adapter (Runtime = FreeLLMAPI).
+  freellmapi:
+    image: ghcr.io/tashfeenahmed/freellmapi:latest
+    ports:
+      - "3001:3001"
+    environment:
+      ENCRYPTION_KEY: ${FREELLMAPI_ENCRYPTION_KEY:-changeme0000000000000000000000000000000000000000000000000000000000}
+      PORT: 3001
+    volumes:
+      - freellmapi_data:/app/server/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
   backend:
     build:
       context: .
@@ -39,13 +57,40 @@ services:
     environment:
       GOTENBERG_URL: http://gotenberg:3000
       ALLOWED_ORIGINS: http://localhost:8080
+      REDIS_URL: redis://redis:6379
       # Optional cloud persistence/auth (leave blank for pure on-prem):
       VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
       VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
     volumes:
       - backend_uploads:/app/backend/uploads
       - backend_reports:/app/backend/reports
     depends_on:
+      - gotenberg
+      - ollama
+      - redis
+    restart: unless-stopped
+
+  # Durable review worker — consumes jobs from Redis so reviews survive restarts
+  # and scale horizontally (run more replicas for more throughput).
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["python", "backend/worker.py"]
+    environment:
+      GOTENBERG_URL: http://gotenberg:3000
+      REDIS_URL: redis://redis:6379
+      VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+      VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
+    volumes:
+      - backend_uploads:/app/backend/uploads
+      - backend_reports:/app/backend/reports
+    depends_on:
+      - redis
       - gotenberg
       - ollama
     restart: unless-stopped
@@ -68,3 +113,4 @@ volumes:
   ollama_models:
   backend_uploads:
   backend_reports:
+  freellmapi_data:

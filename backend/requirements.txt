@@ -4,8 +4,15 @@ python-docx==1.2.0
 openpyxl==3.1.5
 requests>=2.31
 ollama>=0.6
+openai>=1.0
 Pillow>=10
 pypdf>=4.0
 gunicorn>=21
 supabase>=2.0
 pandas>=2.0
+python-dotenv>=1.0
+reportlab>=4.0
+PyJWT>=2.8
+rq>=1.16
+redis>=5.0
+Flask-Limiter>=3.5

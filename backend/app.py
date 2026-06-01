@@ -11,6 +11,15 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+import functools
+
+# Load .env when present (dev convenience; prod uses real env vars).
+try:
+    from dotenv import load_dotenv as _ld
+    _ld(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -23,10 +32,12 @@ from review_engine import (
     create_failover_client,
     test_connection,
     review_document,
+    review_cross_document,
+    diff_findings,
     REVIEW_CATEGORIES,
     SEVERITY_LEVELS,
 )
-from report_generator import generate_excel_report
+from report_generator import generate_excel_report, generate_batch_report
 
 app = Flask(__name__)
 # Restrict CORS via env in production (comma-separated origins); defaults to open
@@ -46,26 +57,222 @@ def _safe_under(directory, filename):
         return None
     return candidate
 
+
+# Optional rate limiting (per user when authenticated, else per IP). No-op if
+# Flask-Limiter isn't installed. Backed by Redis when REDIS_URL is set.
+limiter = None
+try:
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+
+    def _rl_key():
+        # _get_user_id_from_token is defined later; guard with a late lookup.
+        fn = globals().get("_get_user_id_from_token")
+        uid = fn() if fn else None
+        return uid or get_remote_address()
+
+    limiter = Limiter(
+        key_func=_rl_key, app=app,
+        storage_uri=os.environ.get("REDIS_URL") or "memory://",
+        default_limits=[],
+    )
+except Exception as _e:
+    print(f"[*] Rate limiting disabled ({_e})")
+
+
+def _rate_limit(rule):
+    """Decorator that applies a limit only when the limiter is available."""
+    def deco(fn):
+        return limiter.limit(rule)(fn) if limiter else fn
+    return deco
+
 # Store active reviews and reports in memory
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-# Background execution: in-process threads (single-worker). Phase 2 replaces this
-# with a durable Redis+RQ queue + a reviews DB table for crash-safe, multi-worker
-# operation. The dead Huey/Redis scaffolding has been removed.
+# Background execution: a durable Redis+RQ queue when REDIS_URL is set (crash-safe,
+# multi-worker, survives restarts), otherwise in-process threads for local/dev.
+REDIS_URL = os.environ.get("REDIS_URL")
+_rq_queue = None
+if REDIS_URL:
+    try:
+        from redis import Redis as _Redis
+        from rq import Queue as _RQQueue
+        _rq_conn = _Redis.from_url(REDIS_URL)
+        _rq_conn.ping()
+        _rq_queue = _RQQueue("docai", connection=_rq_conn, default_timeout=1800)
+        print("[*] Queue: Redis + RQ (durable). Run the worker: python -m rq worker docai")
+    except Exception as e:
+        print(f"[*] Queue: threading fallback (Redis unavailable: {e})")
+else:
+    print("[*] Queue: threading (set REDIS_URL for a durable queue)")
 
-# Supabase Configuration (Pull from Env)
-SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("VITE_SUPABASE_ANON_KEY") # Use Service Role if possible in production
+# Supabase Configuration
+# Use Service Role key for backend (bypasses RLS, is authoritative).
+# Falls back to Anon key so dev setups still work.
+SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL") or os.environ.get("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_KEY = SUPABASE_SERVICE_KEY or os.environ.get("VITE_SUPABASE_ANON_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
 
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("[*] Supabase: connected")
     except Exception as e:
         print(f"Supabase init error: {e}")
+else:
+    print("[*] Supabase: not configured — using local JSON state only")
+
+
+# ── JWT Auth helper ─────────────────────────────────────────────────────────
+def _get_user_id_from_token():
+    """
+    Extract user_id from the Supabase Bearer JWT in the request.
+    Returns None when auth is not configured (on-prem/local mode) —
+    caller treats None as "unauthenticated but allowed in local mode".
+    """
+    if not SUPABASE_URL:
+        return None  # local/on-prem mode — no auth required
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header[7:].strip()
+
+    # Prefer local JWT decode when the secret is configured (no network round-trip).
+    if SUPABASE_JWT_SECRET:
+        try:
+            import jwt as pyjwt
+            payload = pyjwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"],
+                                   options={"verify_aud": False})
+            return payload.get("sub")
+        except Exception:
+            return None
+
+    # Fallback: ask Supabase to verify (adds a small round-trip).
+    if supabase:
+        try:
+            user = supabase.auth.get_user(token)
+            return user.user.id if user and user.user else None
+        except Exception:
+            return None
+    return None
+
+
+def require_auth(fn):
+    """
+    Decorator: gate an endpoint behind Supabase auth.
+    When Supabase is not configured (SUPABASE_URL unset) the endpoint is
+    allowed through so on-prem deployments work without login.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if SUPABASE_URL:  # auth is enabled
+            uid = _get_user_id_from_token()
+            if not uid:
+                return jsonify({"error": "Unauthorized"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+# ── Per-review Supabase upsert ───────────────────────────────────────────────
+def _supabase_upsert_review(review_id, user_id, data):
+    """Write/update a single review row in the Supabase reviews table."""
+    if not supabase:
+        return
+    try:
+        row = {
+            "id": review_id,
+            "user_id": user_id or "00000000-0000-0000-0000-000000000000",
+            **{k: data[k] for k in (
+                "status", "progress", "message", "review_mode",
+                "document_info", "findings", "summary", "report_filename",
+                "pdf_filename", "engine_status", "error", "original_filepath",
+            ) if k in data},
+        }
+        supabase.table("reviews").upsert(row).execute()
+    except Exception as e:
+        print(f"Supabase review upsert error: {e}")
+
+
+# ── Admin + shared-pool + audit helpers ──────────────────────────────────────
+def _is_admin(user_id):
+    """True if user_id is in the admin_users table (checked via service-role client)."""
+    if not supabase or not user_id:
+        return False
+    try:
+        r = supabase.table("admin_users").select("user_id").eq("user_id", user_id).execute()
+        return bool(r.data)
+    except Exception:
+        return False
+
+
+def require_admin(fn):
+    """Gate an endpoint behind admin membership."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        uid = _get_user_id_from_token()
+        if not uid or not _is_admin(uid):
+            return jsonify({"error": "Admin only"}), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def _user_uses_pool(user_id):
+    """Whether this user opted into the shared LLM key pool ('Auto' mode)."""
+    if not supabase or not user_id:
+        return False
+    try:
+        r = supabase.table("user_settings").select("use_pool").eq("user_id", user_id).single().execute()
+        return bool(r.data and r.data.get("use_pool"))
+    except Exception:
+        return False
+
+
+def _user_notify_email(user_id):
+    """Return the user's email if they opted into completion emails, else None."""
+    if not supabase or not user_id:
+        return None
+    try:
+        s = supabase.table("user_settings").select("notify_email").eq("user_id", user_id).single().execute()
+        if not (s.data and s.data.get("notify_email")):
+            return None
+        u = supabase.auth.admin.get_user_by_id(user_id)
+        return u.user.email if u and u.user else None
+    except Exception:
+        return None
+
+
+def _get_pool_key():
+    """Pick the highest-priority active key from the shared pool. None if empty."""
+    if not supabase:
+        return None
+    try:
+        r = (supabase.table("llm_pool_keys")
+             .select("*").eq("active", True)
+             .order("priority", desc=False).limit(1).execute())
+        return r.data[0] if r.data else None
+    except Exception as e:
+        print(f"Pool key fetch error: {e}")
+        return None
+
+
+def _log_audit(user_id, user_email, action, review_id=None, metadata=None):
+    """Best-effort audit log entry; never raises."""
+    if not supabase:
+        return
+    try:
+        supabase.table("audit_log").insert({
+            "user_id": user_id, "user_email": user_email, "action": action,
+            "review_id": review_id, "metadata": metadata or {},
+        }).execute()
+    except Exception as e:
+        print(f"Audit log error: {e}")
+
 
 # In-memory fallback (now with Supabase sync)
 STATE_FILE = os.path.join(UPLOAD_DIR, "review_state.json")
@@ -127,8 +334,24 @@ def index():
 
 
 def _requires_api_key(host):
-    """Only the Ollama Cloud host needs an API key; local/self-hosted/on-prem don't."""
-    return "ollama.com" in (host or "").lower()
+    """
+    Local hosts (Ollama at :11434, a local FreeLLMAPI at :3001, 127.0.0.1) need no
+    key. Remote/cloud hosts (ollama.com, a hosted FreeLLMAPI, any remote /v1) do.
+    """
+    h = (host or "").lower()
+    if "localhost" in h or "127.0.0.1" in h or "0.0.0.0" in h or "host.docker.internal" in h:
+        return False
+    return True
+
+
+@app.route("/api/standards")
+def list_standards():
+    """List the available standards rule-packs the user can check against."""
+    try:
+        from standards.checker import available_standards
+        return jsonify({"standards": available_standards()})
+    except Exception as e:
+        return jsonify({"standards": [], "error": str(e)})
 
 
 @app.route("/api/check-ollama", methods=["POST"])
@@ -269,7 +492,7 @@ def _categories_for_mode(review_mode=None):
     }
 
 
-def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None):
+def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None, user_id=None, standards=None, glossary=None):
     """Background worker that runs the full document review."""
     store = _load_store()
     try:
@@ -277,12 +500,10 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         if review_id not in store:
             store[review_id] = {}
         
-        store[review_id].update({
-            "status": "parsing",
-            "message": "Parsing document...",
-            "progress": 10
-        })
+        parsing_update = {"status": "parsing", "message": "Parsing document...", "progress": 10}
+        store[review_id].update(parsing_update)
         _save_store(store)
+        _supabase_upsert_review(review_id, user_id, parsing_update)
 
         if file_type == "excel":
             parsed = parse_excel(filepath)
@@ -291,7 +512,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             # Replace heuristic page numbers with PDF-accurate ones when a
             # renderer (Gotenberg/LibreOffice) is available; safe no-op otherwise.
             try:
-                enrich_pages(parsed, filepath)
+                enrich_pages(parsed, filepath, pdf_save_dir=REPORTS_DIR)
             except Exception as e:
                 print(f"Page enrichment skipped: {e}")
         store = _load_store()
@@ -301,13 +522,29 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         })
         _save_store(store)
 
-        # Create Ollama client (supports failover with multiple keys)
+        # "Auto" mode: user opted into the shared admin pool — override the
+        # host/key/model with the highest-priority active pool key.
+        if user_id and _user_uses_pool(user_id):
+            pool = _get_pool_key()
+            if pool:
+                api_key = pool.get("api_key", "")
+                host = pool.get("host_url", host)
+                if pool.get("model_hint"):
+                    model = pool["model_hint"]
+                if pool.get("vision_model_hint"):
+                    vision_model = pool["vision_model_hint"]
+                print(f"[Pool] Using shared pool key '{pool.get('label') or pool.get('provider')}' for review {review_id}")
+
+        # Create Ollama client (supports failover with multiple keys).
+        # api_key may be empty for a local Ollama — create_ollama_client
+        # handles the no-key case by sending no Authorization header.
         api_keys = [k.strip() for k in api_key.split(",") if k.strip()]
         if len(api_keys) > 1:
             client = create_failover_client(api_keys, host)
             print(f"[Failover] Using {len(api_keys)} API keys with automatic rotation.")
         else:
-            client = create_ollama_client(api_keys[0], host)
+            single_key = api_keys[0] if api_keys else ""
+            client = create_ollama_client(single_key, host)
 
         # Progress callback
         def progress_cb(msg, explicit_pct=None):
@@ -334,6 +571,8 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             review_mode=review_mode,
             vision_model=vision_model,
             status_out=engine_status,
+            standards=standards,
+            glossary=glossary,
         )
 
         # Generate report
@@ -376,6 +615,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             "message": "Review complete!",
             "progress": 100,
             "report_filename": report_filename,
+            "pdf_filename": parsed.get("metadata", {}).get("pdf_filename"),
             "review_mode": review_mode,
             "original_filepath": filepath,
             "engine_status": engine_status,
@@ -406,16 +646,36 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             },
         })
         _save_store(store)
+        _supabase_upsert_review(review_id, user_id, store[review_id])
+
+        # Audit + optional completion email
+        _log_audit(user_id, None, "review_done", review_id,
+                   {"findings": len(findings), "mode": review_mode})
+        try:
+            notify_to = _user_notify_email(user_id)
+            if notify_to:
+                from notifier import send_review_complete_email
+                app_url = os.environ.get("APP_URL", "")
+                link = f"{app_url}/dashboard?review={review_id}" if app_url else None
+                send_review_complete_email(notify_to, original_filename, store[review_id].get("summary"), link)
+        except Exception as e:
+            print(f"Notify skipped: {e}")
 
     except Exception as e:
         store = _load_store()
         if review_id in store:
-            store[review_id].update({
-                "status": "error",
-                "message": str(e),
-                "progress": 0,
-            })
+            err_update = {"status": "error", "message": str(e), "progress": 0}
+            store[review_id].update(err_update)
             _save_store(store)
+            _supabase_upsert_review(review_id, user_id, err_update)
+        _log_audit(user_id, None, "review_error", review_id, {"error": str(e)})
+        try:
+            notify_to = _user_notify_email(user_id)
+            if notify_to:
+                from notifier import send_review_error_email
+                send_review_error_email(notify_to, original_filename, str(e))
+        except Exception:
+            pass
     finally:
         # Keep uploaded file for 24h for potential auto-fix application
         # Schedule cleanup after 24h instead of immediate deletion
@@ -432,6 +692,8 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
 
 
 @app.route("/api/review", methods=["POST"])
+@_rate_limit(os.environ.get("REVIEW_RATE_LIMIT", "30 per hour"))
+@require_auth
 def start_review():
     """Upload a document and start the review process in background."""
     api_key = request.form.get("api_key", "")
@@ -440,6 +702,14 @@ def start_review():
     vision_model = request.form.get("vision_model", "") or None
     review_mode = request.form.get("review_mode", "pro")
     file_type = request.form.get("file_type", "doc")
+    standards = [s.strip() for s in request.form.get("standards", "").split(",") if s.strip()]
+    glossary = None
+    _glossary_raw = request.form.get("glossary", "")
+    if _glossary_raw:
+        try:
+            glossary = json.loads(_glossary_raw)
+        except Exception:
+            glossary = None
 
     if not api_key and _requires_api_key(host):
         return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
@@ -464,32 +734,33 @@ def start_review():
 
     # Save uploaded file under a sanitized name (prevents path traversal, B1).
     review_id = str(uuid.uuid4())[:8]
+    user_id = _get_user_id_from_token()
     safe_name = secure_filename(file.filename) or "document"
     filename = f"{review_id}_{safe_name}"
     filepath = os.path.join(UPLOAD_DIR, filename)
     file.save(filepath)
 
     # Initialize progress
+    initial = {"status": "starting", "message": "Uploading document...", "progress": 5}
     store = _load_store()
-    store[review_id] = {
-        "status": "starting",
-        "message": "Uploading document...",
-        "progress": 5,
-    }
+    store[review_id] = initial
     _save_store(store)
+    _supabase_upsert_review(review_id, user_id, initial)
 
-    # Dispatch to a background thread so progress polling works.
-    thread = threading.Thread(
-        target=_run_review_in_background,
-        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model),
-        daemon=True,
-    )
-    thread.start()
+    # Dispatch: durable queue if configured, else a background thread.
+    job_args = (review_id, filepath, file.filename, api_key, host, model,
+                review_mode, file_type, vision_model, user_id, standards, glossary)
+    if _rq_queue is not None:
+        _rq_queue.enqueue(_run_review_in_background, *job_args, job_timeout=1800)
+    else:
+        threading.Thread(target=_run_review_in_background, args=job_args, daemon=True).start()
+    _log_audit(user_id, None, "review_start", review_id, {"file": file.filename, "mode": review_mode, "standards": standards})
 
     return jsonify({"success": True, "review_id": review_id})
 
 
 @app.route("/api/progress/<review_id>")
+@require_auth
 def get_progress(review_id):
     """Get the progress/result of a review."""
     store = _load_store()
@@ -514,7 +785,44 @@ def get_progress(review_id):
     })
 
 
+@app.route("/api/compare")
+@require_auth
+def compare_reviews():
+    """Diff two completed reviews: which findings are NEW, FIXED, or UNCHANGED."""
+    old_id = request.args.get("old")
+    new_id = request.args.get("new")
+    store = _load_store()
+
+    def _findings_for(rid):
+        d = store.get(rid)
+        if d and d.get("findings") is not None:
+            return d["findings"]
+        # Fall back to Supabase if not in the local store
+        if supabase:
+            try:
+                r = supabase.table("reviews").select("findings").eq("id", rid).single().execute()
+                if r.data:
+                    return r.data.get("findings") or []
+            except Exception:
+                pass
+        return None
+
+    old_f = _findings_for(old_id)
+    new_f = _findings_for(new_id)
+    if old_f is None or new_f is None:
+        return jsonify({"error": "One or both reviews not found"}), 404
+
+    result = diff_findings(old_f, new_f)
+    return jsonify({
+        "new": result["new"],
+        "fixed": result["fixed"],
+        "unchanged": result["unchanged"],
+        "summary": {"new": len(result["new"]), "fixed": len(result["fixed"]), "unchanged": len(result["unchanged"])},
+    })
+
+
 @app.route("/api/update-finding/<review_id>", methods=["POST"])
+@require_auth
 def update_finding(review_id):
     """Update a finding's status (Accept/Reject/Working)."""
     data = request.get_json()
@@ -545,6 +853,7 @@ def update_finding(review_id):
 
 
 @app.route("/api/apply-fixes/<review_id>", methods=["POST"])
+@require_auth
 def apply_fixes(review_id):
     """Apply auto-fixable findings to a copy of the document."""
     store = _load_store()
@@ -626,6 +935,287 @@ def download_fixed_doc(filename):
             download_name=os.path.basename(filename),
         )
     return jsonify({"error": "Fixed document not found"}), 404
+
+
+@app.route("/api/export-pdf/<review_id>")
+def export_pdf(review_id):
+    """Render the findings report as a paginated PDF and return it."""
+    store = _load_store()
+    data = store.get(review_id, {})
+    findings = data.get("findings")
+    if findings is None:
+        return jsonify({"error": "Review not found or not complete"}), 404
+    doc_name = data.get("document_info", {}).get("filename", "Document")
+    out_name = f"Report_{secure_filename(os.path.splitext(doc_name)[0]) or 'document'}_{review_id}.pdf"
+    out_path = os.path.join(REPORTS_DIR, out_name)
+    try:
+        from pdf_exporter import findings_to_pdf
+        findings_to_pdf(findings, doc_name, out_path)
+    except ImportError:
+        return jsonify({"error": "PDF export not available (reportlab not installed)"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return send_file(out_path, as_attachment=True, download_name=out_name, mimetype="application/pdf")
+
+
+@app.route("/api/pdf/<review_id>")
+def serve_pdf(review_id):
+    """Serve the Gotenberg/soffice-rendered PDF for the PDF.js viewer."""
+    store = _load_store()
+    data = store.get(review_id, {})
+    if not data:
+        return jsonify({"error": "Review not found"}), 404
+
+    pdf_filename = data.get("pdf_filename")
+    if not pdf_filename:
+        return jsonify({"error": "No rendered PDF available for this review — page locator used heuristic mode"}), 404
+
+    pdf_path = _safe_under(REPORTS_DIR, pdf_filename)
+    if not pdf_path or not os.path.exists(pdf_path):
+        return jsonify({"error": "PDF file not found on disk"}), 404
+
+    return send_file(pdf_path, mimetype="application/pdf")
+
+
+# ============================================================
+# ADMIN ENDPOINTS
+# ============================================================
+@app.route("/api/admin/whoami")
+@require_auth
+def admin_whoami():
+    """Lets the frontend decide whether to show the admin panel."""
+    return jsonify({"is_admin": _is_admin(_get_user_id_from_token())})
+
+
+@app.route("/api/admin/users")
+@require_admin
+def admin_users():
+    """List all users with their review counts (admin dashboard)."""
+    if not supabase:
+        return jsonify({"users": []})
+    try:
+        users = supabase.auth.admin.list_users()
+        users_list = users if isinstance(users, list) else getattr(users, "users", [])
+        reviews = supabase.table("reviews").select("user_id, status").execute().data or []
+        counts = {}
+        for r in reviews:
+            counts[r["user_id"]] = counts.get(r["user_id"], 0) + 1
+        out = [{
+            "id": u.id, "email": u.email,
+            "created_at": str(getattr(u, "created_at", "")),
+            "review_count": counts.get(u.id, 0),
+        } for u in users_list]
+        return jsonify({"users": out})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/usage")
+@require_admin
+def admin_usage():
+    """Aggregate review counts per day + per user (admin dashboard)."""
+    if not supabase:
+        return jsonify({"usage": []})
+    try:
+        rows = supabase.table("audit_log").select("user_email, action, created_at").execute().data or []
+        return jsonify({"usage": rows[-500:]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/pool-keys", methods=["GET", "POST", "DELETE"])
+@require_admin
+def admin_pool_keys():
+    """Manage the shared LLM key pool (admin only)."""
+    if not supabase:
+        return jsonify({"error": "Supabase not configured"}), 400
+    try:
+        if request.method == "GET":
+            rows = supabase.table("llm_pool_keys").select(
+                "id, label, provider, host_url, model_hint, vision_model_hint, priority, active, created_at"
+            ).order("priority").execute().data or []
+            return jsonify({"keys": rows})  # api_key intentionally NOT returned
+        if request.method == "POST":
+            data = request.get_json() or {}
+            supabase.table("llm_pool_keys").insert({
+                "label": data.get("label"),
+                "provider": data.get("provider", "ollama_cloud"),
+                "host_url": data.get("host_url", "https://ollama.com"),
+                "api_key": data.get("api_key", ""),
+                "model_hint": data.get("model_hint"),
+                "vision_model_hint": data.get("vision_model_hint"),
+                "priority": int(data.get("priority", 0)),
+                "active": bool(data.get("active", True)),
+            }).execute()
+            return jsonify({"success": True})
+        if request.method == "DELETE":
+            key_id = request.args.get("id")
+            supabase.table("llm_pool_keys").delete().eq("id", key_id).execute()
+            return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
+# BATCH / SUITE REVIEW (F1)
+# ============================================================
+def _run_batch_in_background(batch_id, files, api_key, host, model, review_mode,
+                             vision_model, user_id, standards, glossary):
+    """Review a suite of documents together + a cross-document pass."""
+    store = _load_store()
+    store[batch_id] = {"status": "parsing", "message": "Starting suite review...", "progress": 5}
+    _save_store(store)
+    try:
+        # Resolve pool key if the user is on Auto mode
+        if user_id and _user_uses_pool(user_id):
+            pool = _get_pool_key()
+            if pool:
+                api_key, host = pool.get("api_key", ""), pool.get("host_url", host)
+                model = pool.get("model_hint") or model
+                vision_model = pool.get("vision_model_hint") or vision_model
+
+        api_keys = [k.strip() for k in (api_key or "").split(",") if k.strip()]
+        client = create_failover_client(api_keys, host) if len(api_keys) > 1 else create_ollama_client(api_keys[0] if api_keys else "", host)
+
+        per_doc = []
+        parsed_list = []
+        all_findings = []
+        total = len(files)
+        for i, (fpath, fname) in enumerate(files):
+            pct = 5 + int((i / max(total, 1)) * 75)
+            s = _load_store(); s[batch_id].update({"progress": pct, "message": f"Reviewing {fname} ({i+1}/{total})..."}); _save_store(s)
+            is_excel = fname.lower().endswith((".xlsx", ".xls"))
+            parsed = parse_excel(fpath) if is_excel else parse_document(fpath)
+            if not is_excel:
+                try:
+                    enrich_pages(parsed, fpath, pdf_save_dir=REPORTS_DIR)
+                except Exception:
+                    pass
+            findings = review_document(client, model, parsed, review_mode=review_mode,
+                                       vision_model=vision_model, standards=standards, glossary=glossary)
+            for f in findings:
+                f["document"] = fname
+            per_doc.append({"name": fname, "findings": findings})
+            parsed_list.append(parsed)
+            all_findings.extend(findings)
+
+        # Cross-document pass (the suite-level value)
+        s = _load_store(); s[batch_id].update({"progress": 85, "message": "Cross-document consistency check..."}); _save_store(s)
+        cross = []
+        try:
+            cross = review_cross_document(client, model, parsed_list, format_glossary_safe(glossary))
+            for f in cross:
+                f["document"] = "Cross-document"
+            all_findings.extend(cross)
+        except Exception as e:
+            print(f"Cross-document pass failed: {e}")
+
+        # Combined report
+        report_name = f"Suite_Report_{batch_id}_{datetime.now():%Y%m%d_%H%M}.xlsx"
+        report_path = os.path.join(REPORTS_DIR, report_name)
+        generate_batch_report(per_doc, cross, report_path)
+
+        sev_counts = {}
+        for f in all_findings:
+            sev_counts[f["severity"]] = sev_counts.get(f["severity"], 0) + 1
+
+        done = {
+            "status": "done", "progress": 100, "message": "Suite review complete!",
+            "report_filename": report_name, "review_mode": review_mode,
+            "findings": all_findings,
+            "document_info": {"filename": f"{total} documents", "words": 0, "sections": 0, "tables": 0, "images": 0},
+            "summary": {"total_findings": len(all_findings), "severity_counts": sev_counts,
+                        "category_counts": {}},
+            "categories": _categories_for_mode(review_mode),
+            "severity_levels": {k: {"label": v["label"], "color": v["color"]} for k, v in SEVERITY_LEVELS.items()},
+            "documents": [{"name": d["name"], "count": len(d["findings"])} for d in per_doc],
+            "cross_count": len(cross),
+        }
+        s = _load_store(); s[batch_id].update(done); _save_store(s)
+        _log_audit(user_id, None, "batch_done", batch_id, {"docs": total, "findings": len(all_findings)})
+    except Exception as e:
+        s = _load_store()
+        if batch_id in s:
+            s[batch_id].update({"status": "error", "message": str(e), "progress": 0})
+            _save_store(s)
+
+
+def format_glossary_safe(glossary):
+    """Render a glossary dict to prompt text (empty string when None)."""
+    try:
+        from review_engine import format_glossary
+        return format_glossary(glossary) if glossary else ""
+    except Exception:
+        return ""
+
+
+@app.route("/api/review-batch", methods=["POST"])
+@_rate_limit(os.environ.get("REVIEW_RATE_LIMIT", "30 per hour"))
+@require_auth
+def start_batch_review():
+    """Review a suite of documents (multiple files or a .zip) as one batch."""
+    api_key = request.form.get("api_key", "")
+    host = request.form.get("host", "https://ollama.com")
+    model = request.form.get("model", "")
+    vision_model = request.form.get("vision_model", "") or None
+    review_mode = request.form.get("review_mode", "pro")
+    standards = [s.strip() for s in request.form.get("standards", "").split(",") if s.strip()]
+    glossary = None
+    if request.form.get("glossary"):
+        try:
+            glossary = json.loads(request.form["glossary"])
+        except Exception:
+            glossary = None
+
+    if not api_key and _requires_api_key(host):
+        return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
+
+    user_id = _get_user_id_from_token()
+    batch_id = str(uuid.uuid4())[:8]
+    saved = []  # (filepath, original_name)
+
+    uploaded = request.files.getlist("documents")
+    archive = request.files.get("archive")
+
+    def _accept(name):
+        return name.lower().endswith((".docx", ".doc", ".xlsx", ".xls"))
+
+    if archive and archive.filename:
+        import zipfile, io as _io
+        try:
+            with zipfile.ZipFile(_io.BytesIO(archive.read())) as zf:
+                for member in zf.namelist():
+                    base = os.path.basename(member)
+                    if not base or not _accept(base):
+                        continue
+                    safe = secure_filename(base) or "document"
+                    out = os.path.join(UPLOAD_DIR, f"{batch_id}_{safe}")
+                    with open(out, "wb") as fh:
+                        fh.write(zf.read(member))
+                    saved.append((out, base))
+        except Exception as e:
+            return jsonify({"success": False, "error": f"Could not read zip: {e}"})
+    for f in uploaded:
+        if f and f.filename and _accept(f.filename):
+            safe = secure_filename(f.filename) or "document"
+            out = os.path.join(UPLOAD_DIR, f"{batch_id}_{safe}")
+            f.save(out)
+            saved.append((out, f.filename))
+
+    if len(saved) < 1:
+        return jsonify({"success": False, "error": "Upload at least one .docx/.xlsx (or a .zip of them)"})
+
+    store = _load_store()
+    store[batch_id] = {"status": "starting", "message": f"Queued {len(saved)} documents...", "progress": 3}
+    _save_store(store)
+
+    job = (batch_id, saved, api_key, host, model, review_mode, vision_model, user_id, standards, glossary)
+    if _rq_queue is not None:
+        _rq_queue.enqueue(_run_batch_in_background, *job, job_timeout=3600)
+    else:
+        threading.Thread(target=_run_batch_in_background, args=job, daemon=True).start()
+    _log_audit(user_id, None, "batch_start", batch_id, {"docs": len(saved)})
+    return jsonify({"success": True, "review_id": batch_id, "batch": True, "doc_count": len(saved)})
 
 
 if __name__ == "__main__":

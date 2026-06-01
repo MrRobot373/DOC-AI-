@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "doc-ai"
+version = "1.0.0"
+description = "DOC-AI — technical document reviewer (engine + CLI)"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[project.scripts]
+docai = "cli:main"
+
+[tool.setuptools]
+# Flat module layout (no package dir); expose the engine modules + CLI.
+py-modules = ["cli", "app", "review_engine", "doc_parser", "report_generator", "doc_fixer", "page_locator", "llm_client", "notifier", "pdf_exporter", "worker"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }

@@ -1,0 +1,17 @@
+{
+  "id": "iso26262",
+  "name": "ISO 26262 (Automotive Functional Safety)",
+  "category": "ISO26262_COMPLIANCE",
+  "required_sections": [
+    {"id": "safety_goals", "label": "Safety Goals", "patterns": ["safety goal"]},
+    {"id": "asil", "label": "ASIL Classification", "patterns": ["asil", "automotive safety integrity level"]},
+    {"id": "hazard", "label": "Hazard Analysis & Risk Assessment (HARA)", "patterns": ["hazard analysis", "hara", "hazard and risk"]},
+    {"id": "safety_mechanism", "label": "Safety Mechanisms", "patterns": ["safety mechanism", "safety measure"]},
+    {"id": "safety_req", "label": "Functional/Technical Safety Requirements", "patterns": ["safety requirement"]},
+    {"id": "fmea", "label": "FMEA / FMEDA", "patterns": ["fmea", "fmeda", "failure mode"]}
+  ],
+  "fmea_tables": {
+    "detect_headers": ["failure mode", "failure", "fault"],
+    "required_columns": ["cause", "effect", "detection", "mitigation"]
+  }
+}

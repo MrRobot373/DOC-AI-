@@ -10,6 +10,7 @@ import re
 import base64
 import zipfile
 import shutil
+from collections import defaultdict
 from docx import Document
 from docx.text.paragraph import Paragraph
 import openpyxl
@@ -860,17 +861,17 @@ def get_document_summary(parsed):
                         break
 
             note_str = " ".join(notes) if notes else ""
-            lines.append(f"  {text[:500]} {note_str}")
+            # Full paragraph text — no truncation. Cutting at 500 chars dropped
+            # the tail of long formulas / dense spec paragraphs before the LLM saw them.
+            lines.append(f"  {text} {note_str}")
 
     # Tables
     if parsed["tables"]:
         lines.append("\n## TABLES IN DOCUMENT")
         for tbl in parsed["tables"]:
             lines.append(f"\n### Table {tbl['index'] + 1} ({tbl['num_rows']}×{tbl['num_cols']})")
-            for row_idx, row in enumerate(tbl["rows"][:20]):  # First 20 rows instead of 5
-                lines.append(f"  Row {row_idx}: {' | '.join(r[:60] for r in row)}")
-            if tbl["num_rows"] > 20:
-                lines.append(f"  ... ({tbl['num_rows'] - 20} more rows)")
+            for row_idx, row in enumerate(tbl["rows"]):  # ALL rows — no cap
+                lines.append(f"  Row {row_idx}: {' | '.join(r[:80] for r in row)}")
 
     # Images
     if parsed["images"]:
@@ -933,6 +934,119 @@ def _section_to_text(section):
             # Include paragraph index marker for precise error location
             lines.append(f"[¶{para_idx}] {para['text']}")
     return "\n".join(lines)
+
+
+# ============================================================
+# SMART CHUNKING (sentence-boundary aware + tables in context)
+# ============================================================
+def _norm(text):
+    return re.sub(r"\s+", " ", (text or "")).strip().lower()
+
+
+def _build_table_section_map(parsed):
+    """
+    Map table index -> section POSITION (enumerate index) by matching a table's
+    caption (its 'name', from the preceding paragraph) to a paragraph inside a
+    section. Keyed by position, not heading text, because many sections share the
+    same heading string and keying by heading would duplicate a table across all
+    of them. Each table maps to exactly one section (first exact/contained match).
+    """
+    mapping = {}
+    sections = parsed.get("sections", [])
+    for tbl in parsed.get("tables", []):
+        name_norm = _norm(tbl.get("name"))
+        if not name_norm or len(name_norm) < 6:
+            continue  # too-short/generic caption → don't guess a section
+        for sec_pos, sec in enumerate(sections):
+            matched = False
+            for para in sec.get("paragraphs", []):
+                ptext = _norm(para.get("text"))
+                if ptext and (ptext == name_norm or name_norm in ptext):
+                    mapping[tbl.get("index")] = sec_pos
+                    matched = True
+                    break
+            if matched:
+                break
+    return mapping
+
+
+def _compact_table(tbl, max_rows=20):
+    """Compact in-context representation of a table (cross-reference aid, not the
+    authoritative table review — the dedicated table pass still reads ALL rows)."""
+    rows = tbl.get("rows", [])
+    name = tbl.get("name", f"Table {tbl.get('index', 0) + 1}")
+    lines = [f"[TABLE: {name} ({tbl.get('num_rows')}x{tbl.get('num_cols')})]"]
+    for row in rows[:max_rows]:
+        lines.append("  " + " | ".join(c[:80] for c in row))
+    if len(rows) > max_rows:
+        lines.append(f"  ... ({len(rows) - max_rows} more rows in the table-specific review)")
+    return "\n".join(lines)
+
+
+def _split_text_smart(text, target_chars, overlap=200):
+    """Split text at sentence boundaries (never mid-sentence), with a small
+    overlap between consecutive chunks so issues spanning the boundary survive."""
+    if len(text) <= target_chars:
+        return [text]
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    parts = []
+    cur = ""
+    for s in sentences:
+        if cur and len(cur) + len(s) + 1 > target_chars:
+            parts.append(cur)
+            tail = cur[-overlap:] if overlap else ""
+            cur = (tail + " " + s).strip()
+        else:
+            cur = (cur + " " + s).strip() if cur else s
+    if cur:
+        parts.append(cur)
+    return parts
+
+
+def get_section_chunks_smart(parsed, target_chars=8000, overlap=200):
+    """
+    Token-friendly chunking that NEVER cuts mid-sentence and keeps each table next
+    to the section that discusses it.
+
+    - Complete sections are grouped together up to `target_chars`.
+    - A single oversized section is split at sentence boundaries (with overlap).
+    - Each table is appended (compactly) to the chunk of the section it belongs to.
+    """
+    table_map = _build_table_section_map(parsed)
+    tables_by_section = defaultdict(list)
+    for tbl in parsed.get("tables", []):
+        sec_pos = table_map.get(tbl.get("index"))
+        if sec_pos is not None:
+            tables_by_section[sec_pos].append(tbl)
+
+    chunks = []
+    current_chunk = []
+    current_size = 0
+
+    def _flush():
+        nonlocal current_chunk, current_size
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+            current_chunk = []
+            current_size = 0
+
+    for sec_pos, section in enumerate(parsed.get("sections", [])):
+        section_text = _section_to_text(section)
+        for tbl in tables_by_section.get(sec_pos, []):
+            section_text += "\n\n" + _compact_table(tbl)
+
+        if len(section_text) > target_chars:
+            _flush()
+            chunks.extend(_split_text_smart(section_text, target_chars, overlap))
+            continue
+
+        if current_size + len(section_text) > target_chars and current_chunk:
+            _flush()
+        current_chunk.append(section_text)
+        current_size += len(section_text)
+
+    _flush()
+    return chunks
 
 
 def _sanitize_docx(filepath):

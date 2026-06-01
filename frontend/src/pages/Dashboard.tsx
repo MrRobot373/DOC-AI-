@@ -7,10 +7,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import DocumentViewer from "@/components/DocumentViewer"
+import AdminPanel from "@/components/AdminPanel"
+import HistoryPanel from "@/components/HistoryPanel"
 import {
     LogOut, Settings, UploadCloud, CheckCircle2, AlertTriangle,
     FileText, X, ChevronDown, ExternalLink, MessageSquare, HelpCircle, Send,
-    Check, XCircle, Clock, Download, Zap, Crosshair
+    Check, XCircle, Clock, Download, Zap, Crosshair, Shield, History
 } from "lucide-react"
 
 interface DashboardProps {
@@ -51,16 +53,63 @@ export default function Dashboard({ user }: DashboardProps) {
     const [visionModel, setVisionModel] = useState("")
     const [reviewMode, setReviewMode] = useState<"normal" | "pro" | "max">("pro")
     const [engineWarning, setEngineWarning] = useState<string | null>(null)
+    const [availableStandards, setAvailableStandards] = useState<{ id: string; name: string }[]>([])
+    const [selectedStandards, setSelectedStandards] = useState<string[]>([])
+    const [confidenceThreshold, setConfidenceThreshold] = useState(0)  // 0–100; hide findings below
 
     const LOCAL_OLLAMA = "http://localhost:11434"
     const CLOUD_OLLAMA = "https://ollama.com"
+    const FREELLMAPI_HOST = "http://localhost:3001"
     const isLocalHost = (h: string) => /localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal/i.test(h || "")
     const runtimeIsLocal = isLocalHost(hostUrl)
-    // Local Ollama needs no API key; cloud does.
-    const keyOk = runtimeIsLocal || !!apiKey
+
+    // "Auto" mode draws from the admin's shared key pool — no host/key/model needed.
+    const [usePool, setUsePool] = useState(false)
+    const [notifyEmail, setNotifyEmail] = useState(false)
+    const [glossaryText, setGlossaryText] = useState("")  // one rule per line; "KEY: expansion" => acronym
+
+    // Parse the freeform glossary box into the structured shape the backend expects.
+    const parseGlossary = (text: string) => {
+        const acronyms: Record<string, string> = {}
+        const canonical_terms: string[] = []
+        for (const line of text.split("\n").map(l => l.trim()).filter(Boolean)) {
+            const m = line.match(/^([A-Za-z0-9_\-./]{2,20}):\s*(.+)$/)
+            if (m) acronyms[m[1]] = m[2]
+            else canonical_terms.push(line)
+        }
+        return { acronyms, canonical_terms, raw: text }
+    }
+    // Key is OK if: pool mode, local host, or a key is present.
+    const keyOk = usePool || runtimeIsLocal || !!apiKey
+
+    // Known Ollama Cloud models — pre-populated so the dropdowns work immediately
+    // without needing a Test & Save round-trip. Best for technical doc analysis:
+    //   qwen3.5:397b-cloud   → best overall (vision + thinking + tools, 256K ctx)
+    //   minimax-m3:cloud     → best for long docs (1M context window)
+    //   deepseek-v3.2:cloud  → best pure reasoning
+    //   nemotron-3-super:cloud → fastest (120B MoE, only 12B active)
+    const CLOUD_PRESET_MODELS = [
+        "qwen3.5:397b-cloud",
+        "minimax-m3:cloud",
+        "deepseek-v3.2:cloud",
+        "nemotron-3-super:cloud",
+        "qwen3.5:cloud",
+        "gemma4:cloud",
+        "glm-5:cloud",
+        "glm-5.1:cloud",
+        "kimi-k2.6:cloud",
+        "minimax-m2.7:cloud",
+    ]
+    const CLOUD_PRESET_VISION = [
+        "qwen3.5:397b-cloud",
+        "minimax-m3:cloud",
+        "gemma4:cloud",
+        "qwen3.5:cloud",
+    ]
 
     // Review State
     const [selectedFile, setSelectedFile] = useState<File | null>(null)
+    const [batchFiles, setBatchFiles] = useState<File[]>([])  // suite review (>1 file)
     const [reviewing, setReviewing] = useState(false)
     const [progressMsg, setProgressMsg] = useState("")
     const [progressPct, setProgressPct] = useState(0)
@@ -78,10 +127,42 @@ export default function Dashboard({ user }: DashboardProps) {
     // Side-by-side viewer state (click a finding -> highlight it in the doc)
     const [viewerHighlight, setViewerHighlight] = useState<string | null>(null)
     const [highlightNonce, setHighlightNonce] = useState(0)
-    const showDocViewer = fileType === "doc" && !!selectedFile && findings.length > 0
+    const showDocViewer = fileType === "doc" && !!selectedFile && findings.length > 0 && batchFiles.length <= 1
+
+    const [viewerTargetPage, setViewerTargetPage] = useState<number | undefined>(undefined)
+    const [viewerAuthToken, setViewerAuthToken] = useState<string | undefined>(undefined)
+
+    // Admin panel
+    const [isAdmin, setIsAdmin] = useState(false)
+    const [showAdminPanel, setShowAdminPanel] = useState(false)
+    const [showHistory, setShowHistory] = useState(false)
+
+    // Load the available standards rule-packs once.
+    useEffect(() => {
+        fetch(`${API_BASE_URL}/api/standards`).then(r => r.json())
+            .then(d => setAvailableStandards(d.standards || [])).catch(() => {})
+    }, [])
+
+    const toggleStandard = (id: string) => {
+        setSelectedStandards(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id])
+    }
+
+    // Grab the current session token once for the viewer + check admin status.
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data }) => {
+            const token = data?.session?.access_token
+            setViewerAuthToken(token || undefined)
+            if (token) {
+                fetch(`${API_BASE_URL}/api/admin/whoami`, { headers: { Authorization: `Bearer ${token}` } })
+                    .then(r => r.json()).then(d => setIsAdmin(!!d.is_admin)).catch(() => {})
+            }
+        })
+    }, [])
 
     const handleFindingClick = (f: any) => {
         if (!showDocViewer) return
+        const page = typeof f.page === "number" ? f.page : parseInt(f.page, 10) || undefined
+        setViewerTargetPage(page)
         setViewerHighlight(f.evidence || f.comment || null)
         setHighlightNonce((n) => n + 1)
     }
@@ -109,14 +190,26 @@ export default function Dashboard({ user }: DashboardProps) {
         setVisionModel(prev => (prev && models.includes(prev) ? prev : (defaultVision || models[0])))
     }
 
+    // When runtime switches to Cloud and no models loaded yet, use the preset list.
+    useEffect(() => {
+        if (!runtimeIsLocal && availableModels.length === 0) {
+            setAvailableModels(CLOUD_PRESET_MODELS)
+            setVisionModels(CLOUD_PRESET_VISION)
+            setSelectedModel(prev => prev || CLOUD_PRESET_MODELS[0])
+            setVisionModel(prev => prev || CLOUD_PRESET_VISION[0])
+        }
+    }, [runtimeIsLocal])
+
     const fetchModels = async (key: string, host: string) => {
-        if (!key && !isLocalHost(host)) return  // cloud needs a key; local doesn't
+        // For cloud with no key yet, preset list is already shown — don't try to fetch.
+        if (!key && !isLocalHost(host)) return
         setLoadingModels(true)
         setModelsError(null)
         try {
+            const ah = await authHeaders()
             const resp = await fetch(`${API_BASE_URL}/api/models`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...ah },
                 body: JSON.stringify({ api_key: key, host }),
             })
             const data = await resp.json()
@@ -144,9 +237,14 @@ export default function Dashboard({ user }: DashboardProps) {
                 .single()
             if (data) {
                 const key = data.ollama_api_key || ""
-                const host = data.ollama_host_url || "https://ollama.com"
+                const host = data.ollama_host_url || LOCAL_OLLAMA
                 setApiKey(key)
                 setHostUrl(host)
+                if (data.selected_model) setSelectedModel(data.selected_model)
+                if (data.vision_model) setVisionModel(data.vision_model)
+                if (data.use_pool) setUsePool(true)
+                if (data.notify_email) setNotifyEmail(true)
+                if (data.glossary_json?.raw) setGlossaryText(data.glossary_json.raw)
                 if (key || isLocalHost(host)) fetchModels(key, host)
             }
         }
@@ -158,18 +256,32 @@ export default function Dashboard({ user }: DashboardProps) {
         navigate("/")
     }
 
+    /** Returns Authorization header with the current Supabase JWT (if available). */
+    const authHeaders = async (): Promise<Record<string, string>> => {
+        const { data } = await supabase.auth.getSession()
+        const token = data?.session?.access_token
+        return token ? { Authorization: `Bearer ${token}` } : {}
+    }
+
     const handleSaveSettings = async () => {
         setSavingSettings(true)
         try {
             await supabase.from('user_settings').upsert({
                 user_id: user.id,
                 ollama_api_key: apiKey,
-                ollama_host_url: hostUrl
+                ollama_host_url: hostUrl,
+                ollama_runtime: usePool ? 'auto' : (runtimeIsLocal ? 'local' : 'cloud'),
+                use_pool: usePool,
+                notify_email: notifyEmail,
+                glossary_json: glossaryText ? parseGlossary(glossaryText) : null,
+                selected_model: selectedModel,
+                vision_model: visionModel,
             })
 
+            const ah = await authHeaders()
             const resp = await fetch(`${API_BASE_URL}/api/check-ollama`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...ah },
                 body: JSON.stringify({ api_key: apiKey, host: hostUrl })
             })
             const data = await resp.json()
@@ -195,23 +307,21 @@ export default function Dashboard({ user }: DashboardProps) {
     }
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0]
-        if (!file) return
+        const files = Array.from(e.target.files || [])
+        if (files.length === 0) return
 
-        const ext = file.name.split('.').pop()?.toLowerCase()
-        if (fileType === 'excel') {
-            if (ext !== 'xlsx' && ext !== 'xls') {
-                alert("Please upload an Excel file (.xlsx or .xls)")
-                return
-            }
-        } else {
-            if (ext !== 'docx' && ext !== 'doc') {
-                alert("Please upload a Word document (.docx or .doc)")
-                return
-            }
+        const okExt = (f: File) => {
+            const ext = f.name.split('.').pop()?.toLowerCase()
+            return fileType === 'excel' ? (ext === 'xlsx' || ext === 'xls') : (ext === 'docx' || ext === 'doc')
+        }
+        const valid = files.filter(okExt)
+        if (valid.length === 0) {
+            alert(fileType === 'excel' ? "Please upload .xlsx/.xls files" : "Please upload .docx/.doc files")
+            return
         }
 
-        setSelectedFile(file)
+        setBatchFiles(valid.length > 1 ? valid : [])
+        setSelectedFile(valid[0])
         setFindings([])
         setProgressPct(0)
         setProgressMsg("")
@@ -219,7 +329,8 @@ export default function Dashboard({ user }: DashboardProps) {
     }
 
     const handleStartReview = async () => {
-        if (!selectedFile || !selectedModel || !keyOk) {
+        // In Auto (pool) mode the model comes from the admin pool, so it's optional here.
+        if (!selectedFile || (!selectedModel && !usePool) || !keyOk) {
             setShowSettingsModal(true)
             return
         }
@@ -231,19 +342,28 @@ export default function Dashboard({ user }: DashboardProps) {
         setFindings([])
         setEngineWarning(null)
 
+        const isBatch = batchFiles.length > 1
         const formData = new FormData()
         if (user) formData.append('user_id', user.id)
         formData.append('api_key', apiKey)
         formData.append('host', hostUrl)
-        formData.append('model', selectedModel)
+        formData.append('model', selectedModel || 'auto')
+        formData.append('standards', selectedStandards.join(','))
+        if (glossaryText.trim()) formData.append('glossary', JSON.stringify(parseGlossary(glossaryText)))
         formData.append('vision_model', visionModel)
         formData.append('review_mode', reviewMode)
-        formData.append('document', selectedFile)
-        formData.append('file_type', fileType)
+        if (isBatch) {
+            batchFiles.forEach(f => formData.append('documents', f))
+        } else {
+            formData.append('document', selectedFile)
+            formData.append('file_type', fileType)
+        }
 
         try {
-            const resp = await fetch(`${API_BASE_URL}/api/review`, {
+            const ah = await authHeaders()
+            const resp = await fetch(`${API_BASE_URL}/api/${isBatch ? 'review-batch' : 'review'}`, {
                 method: 'POST',
+                headers: { ...ah },
                 body: formData,
             })
             const data = await resp.json()
@@ -258,7 +378,8 @@ export default function Dashboard({ user }: DashboardProps) {
 
             const poll = setInterval(async () => {
                 try {
-                    const sResp = await fetch(`${API_BASE_URL}/api/progress/${reviewId}`)
+                    const pollAh = await authHeaders()
+                    const sResp = await fetch(`${API_BASE_URL}/api/progress/${reviewId}`, { headers: pollAh })
                     const sData = await sResp.json()
 
                     if (sData.status === 'error') {
@@ -277,8 +398,9 @@ export default function Dashboard({ user }: DashboardProps) {
 
                         supabase.from('review_history').insert({
                             user_id: user.id,
-                            document_name: selectedFile.name,
-                            report_filename: sData.report_filename
+                            document_name: batchFiles.length > 1 ? `Suite (${batchFiles.length} docs)` : selectedFile.name,
+                            report_filename: sData.report_filename,
+                            review_id: reviewId,
                         }).then()
                     } else {
                         setProgressMsg(sData.message || "Processing...")
@@ -299,9 +421,10 @@ export default function Dashboard({ user }: DashboardProps) {
         if (!reviewId) return
         setUpdatingFindingId(findingId)
         try {
+            const ah = await authHeaders()
             const resp = await fetch(`${API_BASE_URL}/api/update-finding/${reviewId}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...ah },
                 body: JSON.stringify({ finding_id: findingId, status: newStatus })
             })
             const data = await resp.json()
@@ -321,9 +444,10 @@ export default function Dashboard({ user }: DashboardProps) {
         if (!reviewId) return
         setApplyingFixes(true)
         try {
+            const ah = await authHeaders()
             const resp = await fetch(`${API_BASE_URL}/api/apply-fixes/${reviewId}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...ah },
                 body: JSON.stringify({})
             })
             const data = await resp.json()
@@ -343,9 +467,9 @@ export default function Dashboard({ user }: DashboardProps) {
     // Computed stats
     const resolvedCount = findings.filter(f => f.status === 'CLOSED' || f.status === 'IGNORE' || f.status === 'N/A').length
     const autoFixableCount = findings.filter(f => f.fix_type === 'AUTO' && f.status === 'OPEN').length
-    const filteredFindings = statusFilter === 'ALL' 
-        ? findings 
-        : findings.filter(f => f.status === statusFilter)
+    const filteredFindings = findings
+        .filter(f => statusFilter === 'ALL' || f.status === statusFilter)
+        .filter(f => (typeof f.confidence === 'number' ? f.confidence : 1) >= confidenceThreshold / 100)
 
     // Get user initials
     const initials = user.email
@@ -384,12 +508,28 @@ export default function Dashboard({ user }: DashboardProps) {
                                     <p className="text-xs text-gray-500 mt-0.5">Signed in</p>
                                 </div>
                                 <div className="p-1.5">
+                                    {isAdmin && (
+                                        <button
+                                            onClick={() => { setShowProfileMenu(false); setShowAdminPanel(true) }}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-amber-400 hover:bg-amber-500/10 transition-colors"
+                                        >
+                                            <Shield className="h-4 w-4" />
+                                            Admin Panel
+                                        </button>
+                                    )}
                                     <button
                                         onClick={() => { setShowProfileMenu(false); setShowSettingsModal(true) }}
                                         className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors"
                                     >
                                         <Settings className="h-4 w-4" />
                                         API Configuration
+                                    </button>
+                                    <button
+                                        onClick={() => { setShowProfileMenu(false); setShowHistory(true) }}
+                                        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors"
+                                    >
+                                        <History className="h-4 w-4" />
+                                        Review History
                                     </button>
                                     <button
                                         onClick={() => { setShowProfileMenu(false); setShowFeedbackModal(true); setFeedbackSent(false); setFeedbackText(""); setFeedbackImage(null); }}
@@ -420,6 +560,16 @@ export default function Dashboard({ user }: DashboardProps) {
                 </div>
             </header>
 
+            {/* ─── Admin Panel ─── */}
+            {showAdminPanel && (
+                <AdminPanel apiBase={API_BASE_URL} onClose={() => setShowAdminPanel(false)} />
+            )}
+
+            {/* ─── Review History + Version Compare ─── */}
+            {showHistory && (
+                <HistoryPanel apiBase={API_BASE_URL} userId={user.id} onClose={() => setShowHistory(false)} />
+            )}
+
             {/* ─── Settings Modal / Popup ─── */}
             {showSettingsModal && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowSettingsModal(false)}>
@@ -445,28 +595,35 @@ export default function Dashboard({ user }: DashboardProps) {
 
                         {/* Modal Body */}
                         <div className="px-6 py-5 space-y-5">
-                            {/* Runtime: Local (private, on-device) vs Cloud */}
+                            {/* Runtime: Local / Cloud / FreeLLMAPI / Auto (shared pool) */}
                             <div className="space-y-2">
-                                <Label className="text-gray-300 text-sm">Ollama Runtime</Label>
-                                <div className="flex bg-white/5 p-1 rounded-lg border border-white/10 w-fit">
-                                    <button
-                                        type="button"
-                                        onClick={() => setHostUrl(LOCAL_OLLAMA)}
-                                        className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${runtimeIsLocal ? "bg-white text-black" : "text-gray-400 hover:text-white"}`}
-                                    >
-                                        Local (private)
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setHostUrl(CLOUD_OLLAMA)}
-                                        className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${!runtimeIsLocal ? "bg-white text-black" : "text-gray-400 hover:text-white"}`}
-                                    >
-                                        Cloud
-                                    </button>
+                                <Label className="text-gray-300 text-sm">LLM Runtime</Label>
+                                <div className="flex flex-wrap bg-white/5 p-1 rounded-lg border border-white/10 w-fit gap-1">
+                                    {[
+                                        { id: "local", label: "Local (private)", onClick: () => { setUsePool(false); setHostUrl(LOCAL_OLLAMA) } },
+                                        { id: "cloud", label: "Cloud", onClick: () => { setUsePool(false); setHostUrl(CLOUD_OLLAMA) } },
+                                        { id: "freellmapi", label: "FreeLLMAPI", onClick: () => { setUsePool(false); setHostUrl(FREELLMAPI_HOST) } },
+                                        { id: "auto", label: "Auto (pool)", onClick: () => setUsePool(true) },
+                                    ].map(opt => {
+                                        const active = opt.id === "auto" ? usePool
+                                            : !usePool && (opt.id === "local" ? runtimeIsLocal && hostUrl === LOCAL_OLLAMA
+                                                : opt.id === "freellmapi" ? hostUrl.includes(":3001")
+                                                : hostUrl === CLOUD_OLLAMA)
+                                        return (
+                                            <button key={opt.id} type="button" onClick={opt.onClick}
+                                                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${active ? "bg-white text-black" : "text-gray-400 hover:text-white"}`}>
+                                                {opt.label}
+                                            </button>
+                                        )
+                                    })}
                                 </div>
                                 <p className="text-xs text-gray-500">
-                                    {runtimeIsLocal
+                                    {usePool
+                                        ? "Auto mode: uses the shared key pool managed by your admin. Just pick a model name (or leave default)."
+                                        : runtimeIsLocal
                                         ? "Documents never leave this machine/network. No API key required."
+                                        : hostUrl.includes(":3001")
+                                        ? "FreeLLMAPI aggregator (16 free provider tiers behind one endpoint)."
                                         : "Uses ollama.com. Requires an API key. Documents are sent to the cloud."}
                                 </p>
                             </div>
@@ -501,7 +658,11 @@ export default function Dashboard({ user }: DashboardProps) {
                                 </div>
                             )}
                             {availableModels.length === 0 && !loadingModels && (
-                                <p className="text-xs text-gray-500">Click “Test &amp; Save” to load the models available on this host.</p>
+                                <p className="text-xs text-gray-500">
+                                    {runtimeIsLocal
+                                        ? 'Click "Test & Save" to load models from your local Ollama.'
+                                        : 'Add your API key and click "Test & Save" to load your available cloud models.'}
+                                </p>
                             )}
                             {availableModels.length > 0 && (
                                 <>
@@ -536,6 +697,29 @@ export default function Dashboard({ user }: DashboardProps) {
                                     </div>
                                 </>
                             )}
+
+                            {/* Project glossary / rules */}
+                            <div className="space-y-2">
+                                <Label className="text-gray-300 text-sm">Project Glossary & Rules <span className="text-gray-500">(optional)</span></Label>
+                                <textarea
+                                    value={glossaryText}
+                                    onChange={e => setGlossaryText(e.target.value)}
+                                    placeholder={"One per line. Acronyms as 'KEY: meaning', rules as plain text.\nHVDCDC: High-Voltage DC-DC converter\nUse 'Maximum Ratings' not 'Max Ratings'"}
+                                    className="flex w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-xs h-24 focus:outline-none focus:ring-2 focus:ring-white/20 resize-none text-white placeholder:text-gray-600"
+                                />
+                                <p className="text-xs text-gray-500">Injected into the AI prompts so it uses your terminology and watches for your known issues.</p>
+                            </div>
+
+                            {/* Email notification opt-in */}
+                            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={notifyEmail}
+                                    onChange={e => setNotifyEmail(e.target.checked)}
+                                    className="h-4 w-4 rounded border-white/20 bg-white/[0.03]"
+                                />
+                                Email me when a review completes
+                            </label>
 
                             {testResult && (
                                 <div className={`flex items-center gap-2 text-sm px-3 py-2.5 rounded-lg ${testResult.includes("Error") ? "bg-red-500/10 text-red-400 border border-red-500/20" : "bg-green-500/10 text-green-400 border border-green-500/20"}`}>
@@ -766,13 +950,14 @@ export default function Dashboard({ user }: DashboardProps) {
                                 <div className="h-16 w-16 rounded-2xl bg-white/5 flex items-center justify-center mb-5 group-hover:bg-white/10 transition-colors">
                                     <UploadCloud className="h-7 w-7 text-gray-500 group-hover:text-gray-300 transition-colors" />
                                 </div>
-                                <h3 className="text-lg font-medium text-gray-200 mb-1">Click to upload document</h3>
-                                <p className="text-sm text-gray-500">Supports {fileType === 'excel' ? '.xlsx, .xls' : '.docx, .doc'}</p>
+                                <h3 className="text-lg font-medium text-gray-200 mb-1">Click to upload document(s)</h3>
+                                <p className="text-sm text-gray-500">Supports {fileType === 'excel' ? '.xlsx, .xls' : '.docx, .doc'} — select multiple for a suite review</p>
                                 <input
                                     type="file"
                                     ref={fileInputRef}
                                     onChange={handleFileChange}
                                     accept={fileType === 'excel' ? ".xlsx,.xls" : ".docx,.doc"}
+                                    multiple
                                     className="hidden"
                                 />
                             </div>
@@ -783,11 +968,17 @@ export default function Dashboard({ user }: DashboardProps) {
                                         <FileText className="h-5 w-5" />
                                     </div>
                                     <div>
-                                        <h4 className="font-medium text-sm text-gray-200">{selectedFile.name}</h4>
-                                        <p className="text-xs text-gray-500 mt-0.5">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                                        <h4 className="font-medium text-sm text-gray-200">
+                                            {batchFiles.length > 1 ? `Suite review — ${batchFiles.length} documents` : selectedFile.name}
+                                        </h4>
+                                        <p className="text-xs text-gray-500 mt-0.5">
+                                            {batchFiles.length > 1
+                                                ? batchFiles.map(f => f.name).join(", ").slice(0, 80)
+                                                : `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`}
+                                        </p>
                                     </div>
                                 </div>
-                                <Button variant="ghost" size="sm" onClick={() => { setSelectedFile(null); setFindings([]); setReportUrl(null); setProgressPct(0); setProgressMsg("") }} disabled={reviewing} className="text-gray-400 hover:text-white">
+                                <Button variant="ghost" size="sm" onClick={() => { setSelectedFile(null); setBatchFiles([]); setFindings([]); setReportUrl(null); setProgressPct(0); setProgressMsg("") }} disabled={reviewing} className="text-gray-400 hover:text-white">
                                     Remove
                                 </Button>
                             </div>
@@ -805,6 +996,30 @@ export default function Dashboard({ user }: DashboardProps) {
                                         className="h-full bg-white rounded-full transition-all duration-500 ease-out"
                                         style={{ width: `${progressPct}%` }}
                                     ></div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Standards compliance multi-select */}
+                        {fileType === 'doc' && availableStandards.length > 0 && (
+                            <div className="pt-2">
+                                <p className="text-xs text-gray-500 mb-2">Check against standards (optional):</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {availableStandards.map(s => (
+                                        <button
+                                            key={s.id}
+                                            type="button"
+                                            onClick={() => toggleStandard(s.id)}
+                                            title={s.name}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                                                selectedStandards.includes(s.id)
+                                                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                                    : 'bg-white/[0.02] text-gray-400 border-white/10 hover:text-gray-200'
+                                            }`}
+                                        >
+                                            {s.id.toUpperCase()}
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
                         )}
@@ -843,6 +1058,11 @@ export default function Dashboard({ user }: DashboardProps) {
                             {reportUrl && (
                                 <Button asChild variant="outline" className="border-white/15 bg-transparent text-white hover:bg-white/5 h-11">
                                     <a href={reportUrl} download>Download Report (.xlsx)</a>
+                                </Button>
+                            )}
+                            {reviewId && findings.length > 0 && (
+                                <Button asChild variant="outline" className="border-white/15 bg-transparent text-white hover:bg-white/5 h-11">
+                                    <a href={`${API_BASE_URL}/api/export-pdf/${reviewId}`} download>Download PDF</a>
                                 </Button>
                             )}
                         </div>
@@ -889,6 +1109,18 @@ export default function Dashboard({ user }: DashboardProps) {
                                     </button>
                                 ))}
                             </div>
+                        </div>
+
+                        {/* Confidence threshold slider */}
+                        <div className="flex items-center gap-3 text-xs text-gray-400">
+                            <span className="whitespace-nowrap">Min confidence: {confidenceThreshold}%</span>
+                            <input
+                                type="range" min={0} max={100} step={5}
+                                value={confidenceThreshold}
+                                onChange={e => setConfidenceThreshold(parseInt(e.target.value))}
+                                className="w-40 accent-blue-500"
+                            />
+                            <span className="text-gray-600">{filteredFindings.length} of {findings.length} shown</span>
                         </div>
 
                         {/* Batch Actions */}
@@ -1056,7 +1288,15 @@ export default function Dashboard({ user }: DashboardProps) {
                                 <p className="text-xs text-gray-500 flex items-center gap-1.5">
                                     <Crosshair className="h-3.5 w-3.5" /> Click any finding to locate it in the document.
                                 </p>
-                                <DocumentViewer file={selectedFile} highlight={viewerHighlight} highlightNonce={highlightNonce} />
+                                <DocumentViewer
+                                    file={selectedFile}
+                                    reviewId={reviewId}
+                                    apiBase={API_BASE_URL}
+                                    authToken={viewerAuthToken}
+                                    targetPage={viewerTargetPage}
+                                    highlight={viewerHighlight}
+                                    highlightNonce={highlightNonce}
+                                />
                             </div>
                         )}
                         </div>
