@@ -214,8 +214,14 @@ def index():
 
 
 def _requires_api_key(host):
-    """Only the Ollama Cloud host needs an API key; local/self-hosted/on-prem don't."""
-    return "ollama.com" in (host or "").lower()
+    """
+    Local hosts (Ollama at :11434, a local FreeLLMAPI at :3001, 127.0.0.1) need no
+    key. Remote/cloud hosts (ollama.com, a hosted FreeLLMAPI, any remote /v1) do.
+    """
+    h = (host or "").lower()
+    if "localhost" in h or "127.0.0.1" in h or "0.0.0.0" in h or "host.docker.internal" in h:
+        return False
+    return True
 
 
 @app.route("/api/check-ollama", methods=["POST"])

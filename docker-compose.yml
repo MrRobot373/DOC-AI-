@@ -30,6 +30,20 @@ services:
       - "3000:3000"
     restart: unless-stopped
 
+  # FreeLLMAPI — aggregates ~16 free LLM provider tiers behind one OpenAI-compatible
+  # endpoint. Add your provider keys at http://localhost:3001 after first start.
+  # DOC-AI talks to it via the OpenAI-compatible adapter (Runtime = FreeLLMAPI).
+  freellmapi:
+    image: ghcr.io/tashfeenahmed/freellmapi:latest
+    ports:
+      - "3001:3001"
+    environment:
+      ENCRYPTION_KEY: ${FREELLMAPI_ENCRYPTION_KEY:-changeme0000000000000000000000000000000000000000000000000000000000}
+      PORT: 3001
+    volumes:
+      - freellmapi_data:/app/server/data
+    restart: unless-stopped
+
   backend:
     build:
       context: .
@@ -68,3 +82,4 @@ volumes:
   ollama_models:
   backend_uploads:
   backend_reports:
+  freellmapi_data:

@@ -276,9 +276,21 @@ def _chat_with_retry(client_chat_fn, max_retries=3, **kwargs):
 
 def create_ollama_client(api_key, host="https://ollama.com"):
     """
-    Create an Ollama client. Sends a Bearer token only when an API key is given,
-    so a LOCAL Ollama (http://localhost:11434, no key) works the same as cloud.
+    Create an LLM client for the given host.
+
+    - OpenAI-compatible hosts (FreeLLMAPI, LM Studio, vLLM, any /v1 endpoint) get
+      an OpenAICompatClient adapter that speaks the same .chat()/.list() interface.
+    - Otherwise a native Ollama Client. A Bearer token is sent only when an API key
+      is given, so a LOCAL Ollama (http://localhost:11434, no key) works the same as cloud.
+
+    Name kept as create_ollama_client for backward compatibility across the codebase.
     """
+    try:
+        from llm_client import is_openai_compat_host, OpenAICompatClient
+        if is_openai_compat_host(host):
+            return OpenAICompatClient(api_key, host)
+    except ImportError:
+        pass
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     return Client(host=host, headers=headers)
 
