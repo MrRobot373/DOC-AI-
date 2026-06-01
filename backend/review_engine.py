@@ -116,15 +116,145 @@ SEVERITY_LEVELS = {
 
 
 # ============================================================
+# DETERMINISM & STRUCTURED-OUTPUT CONFIG
+# A fixed seed + temperature 0 + a JSON schema make the same
+# (document, model) pair produce the same report every run.
+# Override the seed via env if a deployment needs to.
+# ============================================================
+LLM_SEED = int(os.environ.get("DOCAI_LLM_SEED", "42"))
+
+# JSON schema handed to Ollama's `format` parameter so the model returns a
+# strictly-parseable findings array. `evidence` is REQUIRED — it forces the
+# model to ground every finding in an exact quote, which we then verify.
+FINDINGS_JSON_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string"},
+            "severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR"]},
+            "page": {"type": "string"},
+            "section": {"type": "string"},
+            "comment": {"type": "string"},
+            "fix": {"type": "string"},
+            "fix_type": {"type": "string", "enum": ["AUTO", "MANUAL"]},
+            "evidence": {"type": "string"},
+        },
+        "required": ["category", "severity", "comment", "evidence"],
+    },
+}
+
+
+# Schema for the self-verification (critic) pass — one verdict per finding.
+VERDICTS_JSON_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "keep": {"type": "boolean"},
+            "confidence": {"type": "number"},
+            "reason": {"type": "string"},
+        },
+        "required": ["id", "keep"],
+    },
+}
+
+
+def _llm_options(num_predict=4096):
+    """Standard deterministic options for every findings-generating chat call."""
+    return {"temperature": 0, "seed": LLM_SEED, "num_predict": num_predict}
+
+
+def _chat_findings(client, model, prompt, source, images=None, num_predict=4096):
+    """
+    Single entry point for every findings-producing LLM call.
+
+    Centralizes determinism (seed + temperature 0), structured output
+    (`format=FINDINGS_JSON_SCHEMA`), and parsing. Raises on failure so the
+    caller can record a per-pass error instead of silently swallowing it.
+    """
+    message = {"role": "user", "content": prompt}
+    if images:
+        message["images"] = images
+    response = client.chat(
+        model=model,
+        messages=[message],
+        format=FINDINGS_JSON_SCHEMA,
+        options=_llm_options(num_predict),
+    )
+    reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
+    return _parse_llm_findings(reply, source)
+
+
+# ============================================================
 # OLLAMA CLIENT
 # ============================================================
+VISION_MODEL_HINTS = (
+    "vl", "vision", "llava", "bakllava", "minicpm-v", "moondream",
+)
+
+
+def is_vision_model(name):
+    """Heuristic: does this Ollama model accept images? Used to gate the vision pass."""
+    n = (name or "").lower()
+    return any(h in n for h in VISION_MODEL_HINTS)
+
+
+def load_glossary(path=None):
+    """
+    Load an optional per-project glossary/rules file (JSON). Replaces hardcoded,
+    document-specific rules with config the user controls. Path comes from the
+    arg or the DOCAI_GLOSSARY env var. Returns {} when absent/invalid.
+
+    Expected shape (all keys optional):
+      {
+        "acronyms": {"HVDCDC": "High-Voltage DC-DC converter"},
+        "canonical_terms": ["Use 'Maximum Ratings' (not 'Max Ratings')"],
+        "known_issues": ["A device rating equal to its requirement has no margin"],
+        "notes": "free-form project guidance"
+      }
+    """
+    path = path or os.environ.get("DOCAI_GLOSSARY")
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"[glossary] failed to load {path}: {e}")
+        return {}
+
+
+def format_glossary(glossary):
+    """Render a glossary dict into a prompt block. Empty string when nothing useful."""
+    if not glossary:
+        return ""
+    lines = ["## PROJECT GLOSSARY & RULES (treat as authoritative)"]
+    acronyms = glossary.get("acronyms") or {}
+    if isinstance(acronyms, dict) and acronyms:
+        lines.append("Acronyms / canonical expansions:")
+        lines += [f"- {k}: {v}" for k, v in list(acronyms.items())[:80]]
+    for key, header in (("canonical_terms", "Preferred terminology"),
+                        ("known_issues", "Known issue patterns to watch for")):
+        items = glossary.get(key) or []
+        if isinstance(items, list) and items:
+            lines.append(f"{header}:")
+            lines += [f"- {str(it)}" for it in items[:80]]
+    notes = glossary.get("notes")
+    if notes:
+        lines.append(f"Notes: {notes}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def create_ollama_client(api_key, host="https://ollama.com"):
-    """Create an Ollama client with cloud API authentication."""
-    client = Client(
-        host=host,
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    return client
+    """
+    Create an Ollama client. Sends a Bearer token only when an API key is given,
+    so a LOCAL Ollama (http://localhost:11434, no key) works the same as cloud.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    return Client(host=host, headers=headers)
 
 
 class FailoverOllamaClient:
@@ -188,7 +318,11 @@ def test_connection(api_key, host="https://ollama.com"):
             model_names = [m.model for m in models.models]
         elif isinstance(models, dict) and "models" in models:
             model_names = [m.get("name", m.get("model", "unknown")) for m in models["models"]]
-        return {"success": True, "models": model_names}
+        return {
+            "success": True,
+            "models": model_names,
+            "vision_models": [m for m in model_names if is_vision_model(m)],
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -196,7 +330,7 @@ def test_connection(api_key, host="https://ollama.com"):
 # ============================================================
 # MAIN REVIEW ORCHESTRATOR
 # ============================================================
-def review_document(client, model, parsed_doc, progress_callback=None, review_mode="pro", vision_model=None):
+def review_document(client, model, parsed_doc, progress_callback=None, review_mode="pro", vision_model=None, status_out=None):
     """
     Perform comprehensive multi-pass review of a parsed document.
     Uses 'model' for text/table review and 'vision_model' for image review.
@@ -208,10 +342,19 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
       4. Table-specific deep review
       5. Full-document consistency check
       6. Image review with vision model
+
+    If `status_out` (a dict) is provided, it is populated with per-pass status so
+    the caller can tell the user when AI passes failed instead of silently
+    returning a local-only report. Shape:
+        {"passes": [{"name", "ok", "error", "count"}], "failed_count": int}
     """
     findings = []
     text_model = model
     img_model = vision_model or model
+    pass_status = []  # [{name, ok, error, count}]
+
+    def _record(name, ok, count=0, error=None):
+        pass_status.append({"name": name, "ok": ok, "count": count, "error": error})
     
     # Define which categories to use based on mode
     if review_mode == "normal":
@@ -234,78 +377,91 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         from doc_parser import get_document_summary, get_section_chunks
 
         doc_summary = get_document_summary(parsed_doc)
+        glossary_text = format_glossary(load_glossary())
         chunks = get_section_chunks(parsed_doc, max_chars=5000)
         total_chunks = len(chunks)
 
         # Pass A — Text Quality + Technical combined (per chunk)
+        chunk_failures = 0
+        chunk_count = 0
+        last_chunk_error = None
         for i, chunk in enumerate(chunks):
             pct = 15 + int((i / max(total_chunks, 1)) * 50)  # 15% → 65%
             if progress_callback:
                 progress_callback(f"AI Pass: Analyzing chunk {i + 1}/{total_chunks}...", pct)
 
             try:
-                chunk_findings = _review_chunk_multipass(client, text_model, chunk, doc_summary, i + 1, active_categories)
+                chunk_findings = _review_chunk_multipass(client, text_model, chunk, doc_summary, i + 1, active_categories, glossary_text)
                 if chunk_findings:
                     findings.extend(chunk_findings)
+                chunk_count += 1
             except Exception as e:
+                chunk_failures += 1
+                last_chunk_error = str(e)
                 print(f"Error in chunk {i+1}: {e}")
-            
+
             # Free memory periodically
             if i % 5 == 0:
                 gc.collect()
+
+        # A pass "fails" only if EVERY chunk failed (e.g. bad model / no quota).
+        if total_chunks and chunk_failures == total_chunks:
+            _record("text_chunks", False, count=0, error=last_chunk_error)
+        else:
+            _record("text_chunks", True, count=chunk_count,
+                    error=(f"{chunk_failures} of {total_chunks} chunks failed" if chunk_failures else None))
 
         # ── STEP 3: Full-document cross-reference and consistency check ──
         if progress_callback:
             progress_callback("Checking cross-document consistency & terminology...", 68)
         
-        if review_mode == "pro":
+        if review_mode in ("pro", "max"):
             try:
-                consistency_findings = _review_consistency_with_llm(client, text_model, doc_summary)
+                consistency_findings = _review_consistency_with_llm(client, text_model, doc_summary, glossary_text)
                 if consistency_findings:
                     findings.extend(consistency_findings)
+                _record("consistency", True, count=len(consistency_findings))
             except Exception as e:
-                findings.append({
-                    "category": "CROSS_REFERENCE_ACCURACY",
-                    "severity": "MINOR",
-                    "page": "-",
-                    "section": "ALL",
-                    "comment": f"Error during consistency check: {str(e)}",
-                    "source": "llm_error"
-                })
+                _record("consistency", False, error=str(e))
 
         # ── STEP 4: Table-specific review (LLM) ──
         if parsed_doc.get("tables"):
             if progress_callback:
                 progress_callback("Deep-reviewing tables and data...", 75)
-            
-            if review_mode == "pro":
-                try:
+
+            try:
+                if review_mode in ("pro", "max"):
                     table_findings = _review_tables_with_llm(client, text_model, parsed_doc)
-                    if table_findings:
-                        findings.extend(table_findings)
-                except Exception as e:
-                    pass
-            elif "UNITS_CALCULATIONS" in active_categories:
-                try:
+                elif "UNITS_CALCULATIONS" in active_categories:
                     table_findings = _review_tables_with_llm(client, text_model, parsed_doc, ["UNITS_CALCULATIONS"])
-                    if table_findings:
-                        findings.extend(table_findings)
-                except Exception as e:
-                    pass
+                else:
+                    table_findings = []
+                if table_findings:
+                    findings.extend(table_findings)
+                _record("tables", True, count=len(table_findings))
+            except Exception as e:
+                _record("tables", False, error=str(e))
 
         # ── STEP 5: Image-specific review (use vision model) ──
-        if parsed_doc.get("images") and any(m in img_model.lower() for m in ["vl", "vision", "llava", "qwen"]):
+        if parsed_doc.get("images") and is_vision_model(img_model):
             total_images = min(len([i for i in parsed_doc["images"] if i.get("full_b64") and not i.get("is_small")]), 10)
             if progress_callback:
                 progress_callback(f"Reviewing {total_images} images/diagrams with {img_model}...", 82)
-            
-            if review_mode == "pro":
+
+            if review_mode in ("pro", "max"):
+                image_errors = []
                 try:
-                    image_findings = _review_images_with_llm(client, img_model, parsed_doc, doc_summary, progress_callback)
+                    image_findings = _review_images_with_llm(client, img_model, parsed_doc, doc_summary, progress_callback, errors=image_errors)
                     if image_findings:
                         findings.extend(image_findings)
+                    # The pass only fully fails if every image errored and none succeeded.
+                    if image_errors and not image_findings:
+                        _record("images", False, error="; ".join(image_errors[:3]))
+                    else:
+                        _record("images", True, count=len(image_findings),
+                                error=("; ".join(image_errors[:3]) if image_errors else None))
                 except Exception as e:
-                    pass
+                    _record("images", False, error=str(e))
 
     except Exception as e:
         # Catch-all for review logic so we at least return what we found
@@ -323,8 +479,26 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         progress_callback("Deduplicating and finalizing findings...", 92)
     
     if findings:
+        # Drop hallucinated LLM findings + anchor survivors to a paragraph (0.4/0.8).
+        findings = _ground_and_anchor_findings(findings, parsed_doc)
+        # Critic pass (Pro/Max): second opinion to cut false positives (0.5).
+        if review_mode in ("pro", "max"):
+            try:
+                findings = _critic_filter_findings(client, text_model, findings, progress_callback)
+            except Exception as e:
+                print(f"Critic pass skipped: {e}")
+        # Max = strictest: keep only high-confidence findings (precision over recall).
+        if review_mode == "max":
+            findings = [f for f in findings if float(f.get("confidence", 1.0)) >= 0.5]
         findings = _deduplicate_findings(findings)
-        findings.sort(key=lambda f: SEVERITY_LEVELS.get(f.get("severity", "MINOR"), {}).get("weight", 0), reverse=True)
+        # Sort by severity, then confidence — most trustworthy issues first.
+        findings.sort(
+            key=lambda f: (
+                SEVERITY_LEVELS.get(f.get("severity", "MINOR"), {}).get("weight", 0),
+                float(f.get("confidence", 0) or 0),
+            ),
+            reverse=True,
+        )
 
     # Number findings and assign fix_type
     for idx, f in enumerate(findings, 1):
@@ -333,6 +507,18 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
             f["fix_type"] = _classify_fix_type(f)
         if "status" not in f:
             f["status"] = "OPEN"
+        f.setdefault("confidence", 1.0 if not str(f.get("source", "")).startswith(("llm", "vision")) else 0.7)
+
+    # Publish per-pass status so the caller can warn the user about failed AI passes.
+    if status_out is not None:
+        failed = [p for p in pass_status if not p["ok"]]
+        status_out["passes"] = pass_status
+        status_out["failed_count"] = len(failed)
+        if failed:
+            status_out["warning"] = (
+                f"{len(failed)} AI pass(es) failed ({', '.join(p['name'] for p in failed)}). "
+                f"The report may be incomplete — check the model name and API key/host."
+            )
 
     return findings
 
@@ -356,6 +542,20 @@ def _classify_fix_type(finding):
 # ============================================================
 # LOCAL AUTOMATED CHECKS (No LLM, 100% Consistent)
 # ============================================================
+# Fonts that are legitimately different from the body font (symbols, math, icons).
+# Flagging these as "font inconsistency" is a pure false positive.
+SYMBOL_FONTS = {
+    "symbol", "wingdings", "wingdings 2", "wingdings 3", "webdings",
+    "cambria math", "mt extra", "marlett", "segoe mdl2 assets",
+}
+
+# Common power-rail / net names that look like "value+unit" but are identifiers,
+# not measurements — do not flag these for missing unit spacing.
+COMMON_RAIL_NAMES = {
+    "5V", "3V3", "3V0", "5V0", "1V8", "1V2", "1V0", "12V", "24V", "48V", "0V",
+}
+
+
 def _run_local_checks(parsed_doc):
     """
     Run all local checks that don't need LLM.
@@ -425,6 +625,9 @@ def _check_font_consistency(parsed_doc):
             for para in section["paragraphs"]:
                 for run in para.get("runs", []):
                     if "font" in run and run["font"] != default_font and run["text"].strip():
+                        # Skip symbol/math/icon fonts — these are legitimately different.
+                        if run["font"].strip().lower() in SYMBOL_FONTS:
+                            continue
                         font_mismatches.add(run["font"])
         if font_mismatches:
             findings.append({
@@ -578,19 +781,44 @@ def _check_cross_references(parsed_doc):
         num_match = re.findall(r'Table\s+(\d+[-.]?\d*)', tbl_name, re.IGNORECASE)
         actual_tables.update(num_match)
     
-    # Also scan body text for figure/table captions
+    # Scan paragraphs for captions. Word captions use the "Caption" paragraph
+    # style and SEQ fields (which python-docx renders as "Figure 5" / "Table 3"),
+    # often WITHOUT a trailing ':' or '—'. So we treat a paragraph as a caption
+    # definition when EITHER its style is a caption style OR the label appears at
+    # the very start of the paragraph (the canonical caption position).
+    caption_lead = re.compile(r'^\s*(Figure|Table|Equation)\s+(\d+[-.]?\d*)', re.IGNORECASE)
+    caption_sep = re.compile(r'(Figure|Table|Equation)\s+(\d+[-.]?\d*)\s*[:\-—]', re.IGNORECASE)
+
+    def _record_label(kind, num):
+        kind = kind.lower()
+        if kind == "figure":
+            actual_figures.add(num)
+        elif kind == "table":
+            actual_tables.add(num)
+        elif kind == "equation":
+            actual_equations.add(num)
+
     for section in parsed_doc.get("sections", []):
         for para in section.get("paragraphs", []):
             text = para.get("text", "")
-            # Look for definition patterns like "Figure 5: ..." or "Figure 5 —"
-            fig_defs = re.findall(r'Figure\s+(\d+[-.]?\d*)\s*[:\-—]', text, re.IGNORECASE)
-            actual_figures.update(fig_defs)
-            
-            tbl_defs = re.findall(r'Table\s+(\d+[-.]?\d*)\s*[:\-—]', text, re.IGNORECASE)
-            actual_tables.update(tbl_defs)
-            
-            eq_defs = re.findall(r'Equation\s+(\d+[-.]?\d*)\s*[:\-—]', text, re.IGNORECASE)
-            actual_equations.update(eq_defs)
+            if not text:
+                continue
+            is_caption_style = "caption" in str(para.get("style", "")).lower()
+
+            # Definition with a separator: "Figure 5: ..." anywhere in the line.
+            for kind, num in caption_sep.findall(text):
+                _record_label(kind, num)
+
+            if is_caption_style:
+                # The whole paragraph is a caption — count every label in it.
+                for kind, num in re.findall(r'(Figure|Table|Equation)\s+(\d+[-.]?\d*)', text, re.IGNORECASE):
+                    _record_label(kind, num)
+            else:
+                # A label at the very start of a normal paragraph is the
+                # canonical caption position ("Figure 72 Pin output diagram").
+                lead = caption_lead.match(text)
+                if lead:
+                    _record_label(lead.group(1), lead.group(2))
     
     # Now scan for all references in body text
     ref_pattern = re.compile(r'(?:see\s+|refer\s+to\s+|in\s+|from\s+)?(Figure|Table|Equation|Section)\s+(\d+[-.]?\d*)', re.IGNORECASE)
@@ -632,7 +860,27 @@ def _check_cross_references(parsed_doc):
                             "ref_num": ref_num,
                         }
     
+    # PRECISION GUARD (Phase 0): our caption/figure/table extraction only
+    # recognizes a subset of caption styles, so the "actual" sets can be
+    # incomplete. If we would flag MORE broken references of a type than we
+    # actually detected of that type, our index — not the document — is the
+    # problem, so suppress that type to avoid a flood of false positives.
+    # (Phase 1.2 replaces this with proper SEQ-field / Caption detection.)
+    actual_counts = {
+        "Figure": len(actual_figures),
+        "Table": len(actual_tables),
+        "Equation": len(actual_equations),
+        "Section": len(actual_sections),
+    }
+    broken_counts = Counter(info["ref_type"] for info in issues_found.values())
+    unreliable_types = {
+        rtype for rtype, broken in broken_counts.items()
+        if broken > max(actual_counts.get(rtype, 0), 2)
+    }
+
     for key, info in issues_found.items():
+        if info["ref_type"] in unreliable_types:
+            continue
         findings.append({
             "category": "CROSS_REFERENCE_ACCURACY",
             "severity": "MAJOR",
@@ -643,10 +891,11 @@ def _check_cross_references(parsed_doc):
                 f"It may be a wrong number, or the referenced item is missing."
             ),
             "fix": f"Verify that {key} exists. If it doesn't, correct the reference to the right number or add the missing item.",
+            "evidence": key,
             "source": "local",
             "fix_type": "MANUAL",
         })
-    
+
     return findings
 
 
@@ -822,15 +1071,47 @@ def _check_orphan_references(parsed_doc):
 # ============================================================
 # LLM-POWERED REVIEW FUNCTIONS
 # ============================================================
-def _review_chunk_multipass(client, model, chunk_text, doc_summary, chunk_num, active_categories):
+def _cache_key(*parts):
+    return hashlib.md5("||".join(str(p) for p in parts).encode("utf-8")).hexdigest()
+
+
+def _cache_get(key):
+    """Read cached findings for a content key. Enabled only when DOCAI_CACHE_DIR is set."""
+    cache_dir = os.environ.get("DOCAI_CACHE_DIR")
+    if not cache_dir:
+        return None
+    path = os.path.join(cache_dir, key + ".json")
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            return None
+    return None
+
+
+def _cache_put(key, findings):
+    cache_dir = os.environ.get("DOCAI_CACHE_DIR")
+    if not cache_dir:
+        return
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(os.path.join(cache_dir, key + ".json"), "w", encoding="utf-8") as fh:
+            json.dump(findings, fh)
+    except Exception:
+        pass
+
+
+def _review_chunk_multipass(client, model, chunk_text, doc_summary, chunk_num, active_categories, glossary_text=""):
     """
     Enhanced chunk review with focused, detailed prompt.
     Combines text quality + technical accuracy in one focused pass per chunk.
     """
     cat_list = "\n".join([
-        f"- {cid}: {REVIEW_CATEGORIES[cid]['name']} — {REVIEW_CATEGORIES[cid]['description']}" 
+        f"- {cid}: {REVIEW_CATEGORIES[cid]['name']} — {REVIEW_CATEGORIES[cid]['description']}"
         for cid in active_categories if cid in REVIEW_CATEGORIES
     ])
+    glossary_block = f"\n{glossary_text}\n" if glossary_text else ""
 
     prompt = f"""You are an expert senior technical document reviewer for automotive/embedded systems engineering.
 You are reviewing a Hardware Design Document (HDD), WCCA report, or SCTM for a commercial product.
@@ -861,7 +1142,7 @@ Your job is to find EVERY real issue. You must be thorough but precise — only 
 
 ## Review Categories to use:
 {cat_list}
-
+{glossary_block}
 ## Document Context:
 {doc_summary[:2000]}
 
@@ -889,31 +1170,26 @@ Return ONLY a JSON array. Each finding:
 If no issues found, return [].
 """
 
-    try:
-        response = client.chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.05, "num_predict": 4096},
-        )
+    # Content-addressed cache: identical (model, chunk, categories, glossary) →
+    # identical findings with no LLM call. Opt-in via DOCAI_CACHE_DIR.
+    cache_key = _cache_key("chunk", model, chunk_text, ",".join(active_categories), glossary_text)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
 
-        reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
-        return _parse_llm_findings(reply, f"llm_chunk_{chunk_num}")
-    except Exception as e:
-        err_msg = f"Error during chunk {chunk_num} review: {str(e)}"
-        print(err_msg)
-        try:
-            debug_log_path = os.path.join(os.path.dirname(__file__), "uploads", "raw_llm_responses_debug.txt")
-            with open(debug_log_path, "a", encoding="utf-8") as f:
-                f.write(f"\n--- ERROR (Chunk {chunk_num}) ---\n{err_msg}\n")
-        except: pass
-        return []
+    # Deterministic, schema-constrained call. Errors propagate to the
+    # orchestrator so they can be recorded as a per-pass failure (not swallowed).
+    findings = _chat_findings(client, model, prompt, f"llm_chunk_{chunk_num}")
+    _cache_put(cache_key, findings)
+    return findings
 
 
-def _review_consistency_with_llm(client, model, doc_summary):
+def _review_consistency_with_llm(client, model, doc_summary, glossary_text=""):
     """Check cross-document consistency issues with enhanced prompts."""
 
+    glossary_block = f"\n{glossary_text}\n" if glossary_text else ""
     prompt = f"""You are a senior technical document reviewer. Analyze the overall structure and consistency of this document.
-
+{glossary_block}
 ## Full Document Summary:
 {doc_summary[:8000]}
 
@@ -946,31 +1222,7 @@ Use these categories: TERMINOLOGY_CONSISTENCY, CROSS_REFERENCE_ACCURACY, LOGICAL
 Return ONLY the JSON array. If no issues, return [].
 """
 
-    try:
-        response = client.chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.05, "num_predict": 4096},
-        )
-
-        reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
-        return _parse_llm_findings(reply, "llm_consistency")
-    except Exception as e:
-        err_msg = f"AI consistency check error: {str(e)}"
-        print(err_msg)
-        try:
-            debug_log_path = os.path.join(os.path.dirname(__file__), "uploads", "raw_llm_responses_debug.txt")
-            with open(debug_log_path, "a", encoding="utf-8") as f:
-                f.write(f"\n--- ERROR (Consistency Check) ---\n{err_msg}\n")
-        except: pass
-        return [{
-            "category": "CROSS_REFERENCE_ACCURACY",
-            "severity": "MINOR",
-            "page": "-",
-            "section": "ALL",
-            "comment": f"AI consistency check error (Check your API settings): {str(e)[:200]}",
-            "source": "llm_error",
-        }]
+    return _chat_findings(client, model, prompt, "llm_consistency")
 
 
 def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
@@ -1024,26 +1276,10 @@ Return a JSON array. Each finding:
 Return ONLY the JSON array. If no issues, return [].
 """
 
-    try:
-        response = client.chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.05, "num_predict": 4096},
-        )
-        reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
-        return _parse_llm_findings(reply, "llm_tables")
-    except Exception as e:
-        err_msg = f"Error during table review: {str(e)}"
-        print(err_msg)
-        try:
-            debug_log_path = os.path.join(os.path.dirname(__file__), "uploads", "raw_llm_responses_debug.txt")
-            with open(debug_log_path, "a", encoding="utf-8") as f:
-                f.write(f"\n--- ERROR (Table Review) ---\n{err_msg}\n")
-        except: pass
-        return []
+    return _chat_findings(client, model, prompt, "llm_tables")
 
 
-def _review_images_with_llm(client, model, parsed_doc, doc_summary="", progress_callback=None):
+def _review_images_with_llm(client, model, parsed_doc, doc_summary="", progress_callback=None, errors=None):
     """Review images/diagrams using a Vision model, cross-referencing with document text."""
     if not parsed_doc.get("images"):
         return []
@@ -1111,32 +1347,22 @@ IMPORTANT: Use severity CRITICAL if image data contradicts the document text. Us
 Return ONLY the JSON array. If no issues, return [].
 """
             
+        # Per-image try/except keeps one bad image from aborting the whole pass;
+        # failures are recorded so the orchestrator can surface them (0.3).
         try:
-            response = client.chat(
-                model=model,
-                messages=[{
-                    "role": "user", 
-                    "content": prompt,
-                    "images": [img["full_b64"]]
-                }],
-                options={"temperature": 0.05, "num_predict": 2048},
+            img_findings = _chat_findings(
+                client, model, prompt, f"llm_image_{idx}",
+                images=[img["full_b64"]], num_predict=2048,
             )
-            reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
-            
-            img_findings = _parse_llm_findings(reply, f"llm_image_{idx}")
-            if img_findings:
-                for f in img_findings:
-                    if f["section"] == "-" or f["section"] == "Image / Diagram":
-                        f["section"] = f"Image {idx + 1}"
-                findings.extend(img_findings)
+            for f in img_findings:
+                if f["section"] in ("-", "Image / Diagram"):
+                    f["section"] = f"Image {idx + 1}"
+                f["image_ref"] = idx + 1
+            findings.extend(img_findings)
         except Exception as e:
-            err_msg = f"Error during image {idx} review: {str(e)}"
-            print(err_msg)
-            try:
-                debug_log_path = os.path.join(os.path.dirname(__file__), "uploads", "raw_llm_responses_debug.txt")
-                with open(debug_log_path, "a", encoding="utf-8") as f:
-                    f.write(f"\n--- ERROR (Image {idx}) ---\n{err_msg}\n")
-            except: pass
+            if errors is not None:
+                errors.append(f"Image {idx + 1}: {str(e)[:160]}")
+            print(f"Error during image {idx} review: {str(e)}")
             continue
             
     return findings
@@ -1192,6 +1418,8 @@ def _parse_llm_findings(llm_response, source="llm"):
                         "comment": str(f.get("comment", "")),
                         "fix": str(f.get("fix", "Review content for accuracy.")),
                         "fix_type": str(f.get("fix_type", "MANUAL")),
+                        "evidence": str(f.get("evidence", "")).strip(),
+                        "para_index": None,
                         "source": source,
                     })
                 return valid_findings
@@ -1225,6 +1453,8 @@ def _parse_llm_findings(llm_response, source="llm"):
                         "comment": str(f.get("comment", "")),
                         "fix": str(f.get("fix", "Review content for accuracy.")),
                         "fix_type": str(f.get("fix_type", "MANUAL")),
+                        "evidence": str(f.get("evidence", "")).strip(),
+                        "para_index": None,
                         "source": source + "_regex",
                     })
             except Exception:
@@ -1235,18 +1465,228 @@ def _parse_llm_findings(llm_response, source="llm"):
     return valid_findings
 
 
+# ============================================================
+# EVIDENCE GROUNDING & ANCHORING (ported/extended from kimi analyzer)
+# ============================================================
+# Phrases that signal the model decided something is FINE — never a real finding.
+NON_ERROR_PHRASES = [
+    "actually correct", "is correct", "spelled correctly", "not found",
+    "acceptable", "adequate", "consistent between", "no issue", "not an issue",
+    "no error", "appears correct", "looks correct",
+]
+
+
+def _norm_text(s):
+    """Lowercase, collapse whitespace — for substring/token matching."""
+    if not s:
+        return ""
+    return re.sub(r"\s+", " ", str(s)).strip().lower()
+
+
+def _build_doc_index(parsed_doc):
+    """
+    Build (full normalized doc text, paragraph anchor list) once.
+    Anchors let us attach para_index/page to a grounded finding so the
+    side-by-side viewer can jump straight to the offending text.
+    """
+    parts = [parsed_doc.get("raw_text", "")]
+    for tbl in parsed_doc.get("tables", []):
+        parts.append(tbl.get("name", ""))
+        for row in tbl.get("rows", []):
+            parts.append(" ".join(row))
+    doc_text = _norm_text("\n".join(p for p in parts if p))
+
+    anchors = []  # {para_index, page, section, norm}
+    for section in parsed_doc.get("sections", []):
+        heading = section.get("heading", "")
+        for para in section.get("paragraphs", []):
+            text = para.get("text", "")
+            if not text:
+                continue
+            anchors.append({
+                "para_index": para.get("index"),
+                "page": para.get("page"),
+                "section": heading,
+                "norm": _norm_text(text),
+            })
+    return doc_text, anchors
+
+
+def _ground_and_anchor_findings(findings, parsed_doc):
+    """
+    Reject hallucinated LLM findings and anchor the survivors to a paragraph.
+
+    Rules (applied only to llm-sourced findings; local findings are trusted):
+      - Must carry a non-empty `evidence` quote.
+      - The evidence must actually appear in the document (token overlap),
+        otherwise it is a hallucination and is dropped.
+      - Findings whose text says the content is fine are dropped.
+    Anchoring: locate the evidence inside a paragraph and copy that
+    paragraph's para_index/page onto the finding when missing.
+    """
+    doc_text, anchors = _build_doc_index(parsed_doc)
+    kept = []
+
+    for f in findings:
+        f.setdefault("evidence", "")
+        f.setdefault("para_index", None)
+        source = f.get("source", "")
+        is_llm = source.startswith("llm") or source.startswith("vision")
+
+        blob = _norm_text(" ".join([f.get("comment", ""), f.get("fix", ""), f.get("evidence", "")]))
+        if any(phrase in blob for phrase in NON_ERROR_PHRASES):
+            continue
+
+        if is_llm:
+            evidence = f.get("evidence", "").strip()
+            # Image/vision findings describe a picture, not quotable text — exempt.
+            is_image = source.startswith("vision") or "image" in source or f.get("image_ref")
+            if not is_image:
+                if not evidence:
+                    continue  # ungrounded text finding → drop
+                ev_norm = _norm_text(evidence)
+                tokens = [t for t in re.findall(r"[a-z0-9]{4,}", ev_norm) if len(t) > 3]
+                if tokens and not any(tok in doc_text for tok in tokens[:6]):
+                    continue  # evidence not in document → hallucination → drop
+                # Anchor to the first paragraph that contains the evidence snippet.
+                snippet = ev_norm[:40]
+                if snippet:
+                    for a in anchors:
+                        if snippet in a["norm"]:
+                            if f.get("para_index") is None:
+                                f["para_index"] = a["para_index"]
+                            if str(f.get("page", "-")) in ("-", "", "ALL", "None"):
+                                f["page"] = str(a["page"]) if a["page"] is not None else f.get("page", "-")
+                            break
+
+        kept.append(f)
+
+    return kept
+
+
+def _critic_filter_findings(client, model, findings, progress_callback=None, batch_size=15, errors=None):
+    """
+    Second-opinion "critic" pass that cuts false positives.
+
+    Each LLM-sourced candidate is shown back to the model with its evidence and
+    judged keep/drop + confidence. Local (deterministic) findings are trusted and
+    assigned confidence 1.0. If the critic call fails we keep the batch (never lose
+    findings to an infra error) at a neutral confidence.
+    """
+    llm_findings = [f for f in findings if f.get("source", "").startswith(("llm", "vision"))]
+    other_findings = [f for f in findings if not f.get("source", "").startswith(("llm", "vision"))]
+    for f in other_findings:
+        f.setdefault("confidence", 1.0)
+
+    if not llm_findings:
+        return findings
+
+    if progress_callback:
+        progress_callback("Verifying findings (critic pass)...", None)
+
+    verified = []
+    for start in range(0, len(llm_findings), batch_size):
+        batch = llm_findings[start:start + batch_size]
+        items = [
+            {
+                "id": i,
+                "category": f.get("category", ""),
+                "claim": f.get("comment", "")[:400],
+                "evidence": f.get("evidence", "")[:300],
+            }
+            for i, f in enumerate(batch)
+        ]
+        prompt = f"""You are a STRICT QA reviewer verifying candidate findings from an
+automated technical-document review. For each candidate decide whether it is a
+GENUINE defect that a senior reviewer would keep.
+
+Set "keep": false when the candidate is vague, speculative, not actually an error,
+or when the evidence does not clearly support the claim. Set "keep": true only for
+real, defensible defects. Always include a confidence between 0 and 1.
+
+Candidates (JSON):
+{json.dumps(items, ensure_ascii=False)}
+
+Return ONLY a JSON array of verdicts: {{"id": <int>, "keep": <bool>, "confidence": <0-1>, "reason": "<short>"}}.
+"""
+        try:
+            response = client.chat(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                format=VERDICTS_JSON_SCHEMA,
+                options=_llm_options(2048),
+            )
+            reply = response["message"]["content"] if isinstance(response, dict) else response.message.content
+            verdicts = _parse_json_array(reply)
+            verdict_by_id = {v["id"]: v for v in verdicts if isinstance(v, dict) and "id" in v}
+            for i, f in enumerate(batch):
+                v = verdict_by_id.get(i)
+                if v is None:
+                    f.setdefault("confidence", 0.5)
+                    verified.append(f)
+                elif v.get("keep", True):
+                    f["confidence"] = round(float(v.get("confidence", 0.7)), 2)
+                    verified.append(f)
+                # keep == False → dropped
+        except Exception as e:
+            if errors is not None:
+                errors.append(f"critic: {str(e)[:140]}")
+            for f in batch:
+                f.setdefault("confidence", 0.6)
+            verified.extend(batch)
+
+    return other_findings + verified
+
+
+def _parse_json_array(text):
+    """Best-effort parse of a JSON array from an LLM reply (schema-constrained)."""
+    if not text:
+        return []
+    text = text.strip()
+    if "```" in text:
+        text = text.split("```")[-2] if text.count("```") >= 2 else text.replace("```", "")
+        text = text.replace("json", "", 1).strip()
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        return []
+    try:
+        data = json.loads(text[start:end + 1])
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
 def _deduplicate_findings(findings):
-    """Remove duplicate or very similar findings."""
+    """
+    Remove duplicate / near-duplicate findings, including the same issue reported
+    by different sources (e.g. decimal consistency found by both a local check and
+    the table LLM pass). Two same-category findings are duplicates when:
+      - their comments are >70% similar, OR
+      - they share a location (section + page) and comments are >50% similar, OR
+      - one's evidence is contained in the other's and they share a location.
+    """
     unique = []
     for f in findings:
+        f_comment = _norm_text(f.get("comment", ""))
+        f_section = _norm_text(f.get("section", ""))
+        f_page = str(f.get("page", "-"))
+        f_ev = _norm_text(f.get("evidence", ""))
         is_duplicate = False
         for u in unique:
-            # If category is the same, check comment similarity
-            if f.get('category') == u.get('category'):
-                ratio = difflib.SequenceMatcher(None, f.get('comment', '').lower(), u.get('comment', '').lower()).ratio()
-                if ratio > 0.7:
-                    is_duplicate = True
-                    break
+            if f.get("category") != u.get("category"):
+                continue
+            u_comment = _norm_text(u.get("comment", ""))
+            same_loc = (f_section == _norm_text(u.get("section", ""))) and (f_page == str(u.get("page", "-")))
+            ratio = difflib.SequenceMatcher(None, f_comment, u_comment).ratio()
+            u_ev = _norm_text(u.get("evidence", ""))
+            ev_overlap = bool(f_ev and u_ev and (f_ev in u_ev or u_ev in f_ev))
+            if ratio > 0.7 or (same_loc and ratio > 0.5) or (same_loc and ev_overlap):
+                is_duplicate = True
+                # Prefer to keep the higher-severity / higher-confidence copy.
+                if SEVERITY_LEVELS.get(f.get("severity", "MINOR"), {}).get("weight", 0) > \
+                   SEVERITY_LEVELS.get(u.get("severity", "MINOR"), {}).get("weight", 0):
+                    u.update(f)
+                break
         if not is_duplicate:
             unique.append(f)
     return unique
@@ -1401,7 +1841,7 @@ def _check_toc_heading_sync(parsed_doc):
             "severity": "MAJOR",
             "page": str(heading.get("page", "-")),
             "section": heading.get("text", "Unknown"),
-            "comment": f"Heading '{heading.get('text')}' appears in the document but is missing from the TOC.",
+            "comment": f"Heading '{heading.get('text')}' appears in the document body but is missing from the TOC.",
             "fix": f"Refresh the TOC so it includes '{heading.get('text')}'.",
             "source": "local",
             "fix_type": "MANUAL",
@@ -1593,18 +2033,30 @@ def _check_repeated_words(parsed_doc):
     return findings
 
 def _check_unmatched_brackets(parsed_doc):
+    """
+    Flag unbalanced parentheses, but ONLY in self-contained paragraphs that end
+    with sentence punctuation. This avoids false positives when a parenthetical
+    legitimately spans multiple paragraphs/list items.
+    """
     findings = []
     for section in parsed_doc.get("sections", []):
         for para in section.get("paragraphs", []):
             text = para.get("text", "")
-            if "(" in text and ")" not in text[text.find("("):] or ")" in text and "(" not in text[:text.find(")")]:
+            if not text:
+                continue
+            stripped = text.rstrip()
+            # Only judge balance on paragraphs that look like a complete sentence.
+            if not stripped.endswith((".", "!", "?", ":", ";")):
+                continue
+            if text.count("(") != text.count(")") or text.count("[") != text.count("]"):
                 findings.append({
                     "category": "GRAMMAR_SPELLING",
                     "severity": "MINOR",
                     "page": str(para.get("page", "-")),
                     "section": section.get("heading", ""),
-                    "comment": "Unmatched parenthesis detected in text.",
-                    "fix": "Ensure all brackets are closed correctly.",
+                    "comment": f"Unmatched bracket detected in text: '{text[:80]}'.",
+                    "fix": "Ensure all brackets are opened and closed correctly.",
+                    "evidence": text[:120],
                     "source": "local",
                     "fix_type": "MANUAL",
                 })
@@ -1659,23 +2111,35 @@ def _check_min_typ_max_tables(parsed_doc):
     return findings
 
 def _check_unit_standardization(parsed_doc):
+    """
+    Flag missing spaces before units (e.g. '5V' → '5 V') but skip common
+    power-rail/net names (5V, 3V3, 12V…) which are identifiers, not measurements.
+    One finding per section to keep volume down.
+    """
     findings = []
-    # Checks for missing spaces before units e.g. 5V instead of 5 V
-    bad_unit_pattern = re.compile(r'\b\d+(V|mA|uA|A|Hz|kHz|MHz)\b')
+    bad_unit_pattern = re.compile(r'\b\d+(?:\.\d+)?(V|mA|uA|A|Hz|kHz|MHz|W|mW)\b')
     for section in parsed_doc.get("sections", []):
+        flagged_here = False
         for para in section.get("paragraphs", []):
+            if flagged_here:
+                break
             text = para.get("text", "")
-            match = bad_unit_pattern.search(text)
-            if match:
+            for match in bad_unit_pattern.finditer(text):
+                token = match.group(0)
+                if token.upper() in COMMON_RAIL_NAMES:
+                    continue  # net/rail name, not a measurement
                 findings.append({
                     "category": "UNITS_CALCULATIONS",
                     "severity": "MINOR",
                     "page": str(para.get("page", "-")),
                     "section": section.get("heading", ""),
-                    "comment": f"Missing space before unit: '{match.group(0)}'. Standard convention is to have a space between the number and unit.",
+                    "comment": f"Missing space before unit: '{token}'. Convention is a space between value and unit (e.g. '{token[:-len(match.group(1))]} {match.group(1)}').",
                     "fix": "Insert a space between the numeric value and the unit.",
+                    "evidence": token,
                     "source": "local",
                     "fix_type": "MANUAL",
                 })
+                flagged_here = True
+                break
     return findings
 

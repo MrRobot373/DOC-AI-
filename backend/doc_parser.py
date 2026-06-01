@@ -19,6 +19,54 @@ from PIL import Image
 import openpyxl
 
 
+def _error_doc_result(filepath, error):
+    """
+    Return a complete, schema-valid parsed-document dict for the failure path.
+
+    Every key that downstream consumers (get_document_summary, _section_to_text,
+    review_engine local checks, app.py) read MUST be present here, otherwise a
+    bad upload turns a soft parse error into a hard KeyError crash.
+    """
+    message = f"Error parsing document: {error}"
+    para = {
+        "index": 0,
+        "text": message,
+        "style": "",
+        "heading_level": None,
+        "format": {},
+        "runs": [],
+        "has_image": False,
+        "page": 1,
+    }
+    return {
+        "filename": os.path.basename(filepath),
+        "sections": [{
+            "heading": "(Parse Error)",
+            "level": 0,
+            "paragraphs": [para],
+            "start_index": 0,
+            "page": 1,
+        }],
+        "headings": [],
+        "tables": [],
+        "images": [],
+        "toc": {"title": None, "entries": []},
+        "formatting": {"default_font": None, "default_size": None, "page_margins": {}},
+        "raw_text": message,
+        "metadata": {"source_type": "docx", "parse_error": str(error)},
+        "statistics": {
+            "total_paragraphs": 1,
+            "total_words": 0,
+            "total_characters": len(message),
+            "total_sections": 1,
+            "total_tables": 0,
+            "total_images": 0,
+            "total_pages": 1,
+            "empty_sections": 0,
+        },
+    }
+
+
 def parse_document(filepath):
     """
     Parse a .docx file and extract all content in a structured format.
@@ -33,11 +81,9 @@ def parse_document(filepath):
         else:
             raise e
     except Exception as e:
-        # Fallback to a very simple parse if something fails
-        return {
-            "statistics": {"total_words": 0, "total_sections": 0, "total_tables": 0, "total_images": 0},
-            "sections": [{"title": "Error", "level": 1, "paragraphs": [{"text": f"Error parsing document: {str(e)}", "heading_level": 0, "alignment": "LEFT", "runs": [], "has_image": False}]}]
-        }
+        # Fallback to a complete, schema-valid skeleton so downstream code
+        # (get_document_summary, _section_to_text, local checks) never KeyErrors.
+        return _error_doc_result(filepath, e)
     result = {
         "filename": os.path.basename(filepath),
         "sections": [],

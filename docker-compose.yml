@@ -1,0 +1,70 @@
+# On-prem / local full stack:  docker compose up --build
+#
+# Services:
+#   ollama     - local open-source LLM runtime (private; docs never leave the host)
+#   gotenberg  - DOCX -> PDF rendering for accurate page numbers
+#   backend    - Flask API (review engine)
+#   frontend   - React UI (nginx)
+#
+# After it's up:
+#   1) Pull a model:   docker compose exec ollama ollama pull qwen2.5:7b
+#      (and a vision model for diagrams, e.g.:  ollama pull qwen2.5-vl:7b)
+#   2) Open http://localhost:8080 -> Settings -> Runtime = Local,
+#      Host URL = http://ollama:11434  (no API key needed)
+#
+# NOTE: durable queue (Redis) + reviews table (Postgres) + Supabase auth arrive
+# with the Phase 2 infra work; this bundle runs the current threading/JSON path.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "10000:10000"
+    environment:
+      GOTENBERG_URL: http://gotenberg:3000
+      ALLOWED_ORIGINS: http://localhost:8080
+      # Optional cloud persistence/auth (leave blank for pure on-prem):
+      VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+      VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+    volumes:
+      - backend_uploads:/app/backend/uploads
+      - backend_reports:/app/backend/reports
+    depends_on:
+      - gotenberg
+      - ollama
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_URL: http://localhost:10000
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  ollama_models:
+  backend_uploads:
+  backend_reports:

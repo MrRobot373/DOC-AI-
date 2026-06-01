@@ -6,6 +6,17 @@ services:
     startCommand: "cd backend && gunicorn -c ../gunicorn.conf.py app:app"
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10.0
+        value: 3.11.9
       - key: PORT
         value: 10000
+      # Lock CORS to your frontend origin(s) in production:
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # Reachable Gotenberg instance for accurate page numbers (optional):
+      - key: GOTENBERG_URL
+        sync: false
+      # Cloud persistence/auth (optional):
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false

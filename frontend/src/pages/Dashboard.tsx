@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
+import DocumentViewer from "@/components/DocumentViewer"
 import {
     LogOut, Settings, UploadCloud, CheckCircle2, AlertTriangle,
     FileText, X, ChevronDown, ExternalLink, MessageSquare, HelpCircle, Send,
-    Check, XCircle, Clock, Download, Zap
+    Check, XCircle, Clock, Download, Zap, Crosshair
 } from "lucide-react"
 
 interface DashboardProps {
@@ -40,17 +41,23 @@ export default function Dashboard({ user }: DashboardProps) {
     const [hostUrl, setHostUrl] = useState("https://ollama.com")
     const [savingSettings, setSavingSettings] = useState(false)
     const [testResult, setTestResult] = useState<string | null>(null)
-    const [availableModels] = useState<string[]>([
-        "qwen3-vl:235b-cloud",
-        "kimi-k2-thinking:cloud",
-        "kimi-k2.5:cloud",
-        "nemotron-3-super:cloud",
-        "qwen3.5:397b-cloud",
-        "minimax-m2.7:cloud"
-    ])
-    const [selectedModel, setSelectedModel] = useState("nemotron-3-super:cloud")
-    const [visionModel, setVisionModel] = useState("qwen3.5:397b-cloud")
+    // Models are fetched live from the selected Ollama host (never hardcoded),
+    // so users can only pick models that actually exist on their server.
+    const [availableModels, setAvailableModels] = useState<string[]>([])
+    const [visionModels, setVisionModels] = useState<string[]>([])
+    const [loadingModels, setLoadingModels] = useState(false)
+    const [modelsError, setModelsError] = useState<string | null>(null)
+    const [selectedModel, setSelectedModel] = useState("")
+    const [visionModel, setVisionModel] = useState("")
     const [reviewMode, setReviewMode] = useState<"normal" | "pro" | "max">("pro")
+    const [engineWarning, setEngineWarning] = useState<string | null>(null)
+
+    const LOCAL_OLLAMA = "http://localhost:11434"
+    const CLOUD_OLLAMA = "https://ollama.com"
+    const isLocalHost = (h: string) => /localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal/i.test(h || "")
+    const runtimeIsLocal = isLocalHost(hostUrl)
+    // Local Ollama needs no API key; cloud does.
+    const keyOk = runtimeIsLocal || !!apiKey
 
     // Review State
     const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -68,6 +75,17 @@ export default function Dashboard({ user }: DashboardProps) {
     const [fixedDocUrl, setFixedDocUrl] = useState<string | null>(null)
     const [updatingFindingId, setUpdatingFindingId] = useState<number | null>(null)
 
+    // Side-by-side viewer state (click a finding -> highlight it in the doc)
+    const [viewerHighlight, setViewerHighlight] = useState<string | null>(null)
+    const [highlightNonce, setHighlightNonce] = useState(0)
+    const showDocViewer = fileType === "doc" && !!selectedFile && findings.length > 0
+
+    const handleFindingClick = (f: any) => {
+        if (!showDocViewer) return
+        setViewerHighlight(f.evidence || f.comment || null)
+        setHighlightNonce((n) => n + 1)
+    }
+
     const fileInputRef = useRef<HTMLInputElement>(null)
 
     // Close profile dropdown on outside click
@@ -81,6 +99,41 @@ export default function Dashboard({ user }: DashboardProps) {
         return () => document.removeEventListener("mousedown", handler)
     }, [])
 
+    // Fetch the live model list from the chosen Ollama host. Picks sensible
+    // defaults for the text and vision models from what actually exists.
+    const applyModelList = (models: string[], vision: string[]) => {
+        setAvailableModels(models)
+        setVisionModels(vision)
+        setSelectedModel(prev => (prev && models.includes(prev) ? prev : models[0]))
+        const defaultVision = vision[0] || models.find(m => /vl|vision|llava/i.test(m))
+        setVisionModel(prev => (prev && models.includes(prev) ? prev : (defaultVision || models[0])))
+    }
+
+    const fetchModels = async (key: string, host: string) => {
+        if (!key && !isLocalHost(host)) return  // cloud needs a key; local doesn't
+        setLoadingModels(true)
+        setModelsError(null)
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/models`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ api_key: key, host }),
+            })
+            const data = await resp.json()
+            const models: string[] = Array.isArray(data.models) ? data.models : []
+            if (data.success && models.length) {
+                applyModelList(models, Array.isArray(data.vision_models) ? data.vision_models : [])
+            } else {
+                setAvailableModels([])
+                setModelsError(data.error || "No models returned by this host")
+            }
+        } catch (e: any) {
+            setModelsError(e.message)
+        } finally {
+            setLoadingModels(false)
+        }
+    }
+
     // Load settings on mount
     useEffect(() => {
         const loadSettings = async () => {
@@ -90,8 +143,11 @@ export default function Dashboard({ user }: DashboardProps) {
                 .eq('user_id', user.id)
                 .single()
             if (data) {
-                setApiKey(data.ollama_api_key || "")
-                setHostUrl(data.ollama_host_url || "https://ollama.com")
+                const key = data.ollama_api_key || ""
+                const host = data.ollama_host_url || "https://ollama.com"
+                setApiKey(key)
+                setHostUrl(host)
+                if (key || isLocalHost(host)) fetchModels(key, host)
             }
         }
         loadSettings().catch(() => { })
@@ -120,6 +176,14 @@ export default function Dashboard({ user }: DashboardProps) {
 
             if (data.success) {
                 setTestResult("Connection Successful!")
+                // /api/check-ollama returns the live model list — use it directly.
+                const models: string[] = Array.isArray(data.models) ? data.models : []
+                if (models.length) {
+                    applyModelList(models, Array.isArray(data.vision_models) ? data.vision_models : [])
+                    setModelsError(null)
+                } else {
+                    setModelsError("Connected, but no models found on this host.")
+                }
             } else {
                 setTestResult("Error: " + data.error)
             }
@@ -155,7 +219,7 @@ export default function Dashboard({ user }: DashboardProps) {
     }
 
     const handleStartReview = async () => {
-        if (!selectedFile || !apiKey) {
+        if (!selectedFile || !selectedModel || !keyOk) {
             setShowSettingsModal(true)
             return
         }
@@ -165,12 +229,13 @@ export default function Dashboard({ user }: DashboardProps) {
         setProgressPct(5)
         setReportUrl(null)
         setFindings([])
+        setEngineWarning(null)
 
         const formData = new FormData()
         if (user) formData.append('user_id', user.id)
         formData.append('api_key', apiKey)
         formData.append('host', hostUrl)
-        formData.append('model', selectedModel || "gpt-oss:120b-cloud")
+        formData.append('model', selectedModel)
         formData.append('vision_model', visionModel)
         formData.append('review_mode', reviewMode)
         formData.append('document', selectedFile)
@@ -208,6 +273,7 @@ export default function Dashboard({ user }: DashboardProps) {
                         setReportUrl(`${API_BASE_URL}/api/download/${sData.report_filename}`)
                         setReviewId(reviewId)
                         setReviewing(false)
+                        setEngineWarning(sData.engine_status?.warning || null)
 
                         supabase.from('review_history').insert({
                             user_id: user.id,
@@ -379,6 +445,31 @@ export default function Dashboard({ user }: DashboardProps) {
 
                         {/* Modal Body */}
                         <div className="px-6 py-5 space-y-5">
+                            {/* Runtime: Local (private, on-device) vs Cloud */}
+                            <div className="space-y-2">
+                                <Label className="text-gray-300 text-sm">Ollama Runtime</Label>
+                                <div className="flex bg-white/5 p-1 rounded-lg border border-white/10 w-fit">
+                                    <button
+                                        type="button"
+                                        onClick={() => setHostUrl(LOCAL_OLLAMA)}
+                                        className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${runtimeIsLocal ? "bg-white text-black" : "text-gray-400 hover:text-white"}`}
+                                    >
+                                        Local (private)
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setHostUrl(CLOUD_OLLAMA)}
+                                        className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${!runtimeIsLocal ? "bg-white text-black" : "text-gray-400 hover:text-white"}`}
+                                    >
+                                        Cloud
+                                    </button>
+                                </div>
+                                <p className="text-xs text-gray-500">
+                                    {runtimeIsLocal
+                                        ? "Documents never leave this machine/network. No API key required."
+                                        : "Uses ollama.com. Requires an API key. Documents are sent to the cloud."}
+                                </p>
+                            </div>
                             <div className="space-y-2">
                                 <Label className="text-gray-300 text-sm">Host URL</Label>
                                 <Input
@@ -388,16 +479,30 @@ export default function Dashboard({ user }: DashboardProps) {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label className="text-gray-300 text-sm">API Key(s)</Label>
+                                <Label className="text-gray-300 text-sm">
+                                    API Key(s) {runtimeIsLocal && <span className="text-gray-500">(optional for Local)</span>}
+                                </Label>
                                 <textarea
                                     value={apiKey}
                                     onChange={e => setApiKey(e.target.value)}
-                                    placeholder={"Paste one or more API keys, separated by commas.\nExample: key1, key2, key3"}
+                                    placeholder={runtimeIsLocal ? "Not required for a local Ollama." : "Paste one or more API keys, separated by commas.\nExample: key1, key2, key3"}
                                     className="flex w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-sm h-20 focus:outline-none focus:ring-2 focus:ring-white/20 resize-none text-white placeholder:text-gray-600"
                                 />
                                 <p className="text-xs text-gray-500">Multiple keys enable automatic failover if one key's quota is exceeded.</p>
                             </div>
 
+                            {loadingModels && (
+                                <p className="text-xs text-gray-500">Loading models from host…</p>
+                            )}
+                            {modelsError && (
+                                <div className="flex items-center gap-2 text-sm px-3 py-2.5 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20">
+                                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                                    {modelsError}
+                                </div>
+                            )}
+                            {availableModels.length === 0 && !loadingModels && (
+                                <p className="text-xs text-gray-500">Click “Test &amp; Save” to load the models available on this host.</p>
+                            )}
                             {availableModels.length > 0 && (
                                 <>
                                     <div className="space-y-2">
@@ -419,10 +524,15 @@ export default function Dashboard({ user }: DashboardProps) {
                                             className="flex h-11 w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
                                         >
                                             {availableModels.map(m => (
-                                                <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">{m}</option>
+                                                <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">
+                                                    {visionModels.includes(m) ? `${m} (vision)` : m}
+                                                </option>
                                             ))}
                                         </select>
-                                        <p className="text-xs text-gray-500">Used for reviewing images, diagrams, and flowcharts.</p>
+                                        <p className="text-xs text-gray-500">
+                                            Used for reviewing images, diagrams, and flowcharts.
+                                            {visionModels.length === 0 && " No vision-capable model detected on this host — image review will be skipped."}
+                                        </p>
                                     </div>
                                 </>
                             )}
@@ -454,7 +564,7 @@ export default function Dashboard({ user }: DashboardProps) {
                             <Button variant="ghost" onClick={() => setShowSettingsModal(false)} className="text-gray-400 hover:text-white hover:bg-white/5">
                                 Cancel
                             </Button>
-                            <Button onClick={handleSaveSettings} disabled={savingSettings || !apiKey} className="bg-white text-black hover:bg-gray-200 px-6">
+                            <Button onClick={handleSaveSettings} disabled={savingSettings || !keyOk} className="bg-white text-black hover:bg-gray-200 px-6">
                                 {savingSettings ? "Testing..." : "Test & Save"}
                             </Button>
                         </div>
@@ -739,6 +849,14 @@ export default function Dashboard({ user }: DashboardProps) {
                     </CardContent>
                 </Card>
 
+                {/* AI pass failure banner — so a bad model/key never looks like a "clean" thin report */}
+                {engineWarning && (
+                    <div className="w-full mt-6 flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+                        <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                        <span>{engineWarning}</span>
+                    </div>
+                )}
+
                 {/* Findings */}
                 {findings.length > 0 && (
                     <div className="w-full mt-10 space-y-4">
@@ -796,12 +914,14 @@ export default function Dashboard({ user }: DashboardProps) {
                             )}
                         </div>
 
-                        {/* Findings List */}
-                        <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                        {/* Findings list + (optional) side-by-side document viewer */}
+                        <div className={`grid gap-4 ${showDocViewer ? 'lg:grid-cols-2 items-start' : ''}`}>
+                        <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
                             {filteredFindings.map((f, i) => (
                                 <div
                                     key={f.id || i}
-                                    className={`border rounded-xl p-4 text-sm transition-all ${
+                                    onClick={() => handleFindingClick(f)}
+                                    className={`border rounded-xl p-4 text-sm transition-all ${showDocViewer ? 'cursor-pointer' : ''} ${
                                         f.status === 'CLOSED' ? 'bg-green-500/[0.03] border-green-500/10 opacity-60'
                                         : f.status === 'IGNORE' || f.status === 'N/A' ? 'bg-white/[0.01] border-white/5 opacity-40'
                                         : f.status === 'WORKING' ? 'bg-yellow-500/[0.03] border-yellow-500/10'
@@ -818,6 +938,15 @@ export default function Dashboard({ user }: DashboardProps) {
                                             {f.fix_type === 'AUTO' && (
                                                 <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 rounded text-[10px] font-medium flex items-center gap-1">
                                                     <Zap className="h-2.5 w-2.5" />Auto
+                                                </span>
+                                            )}
+                                            {/* Confidence (from the critic pass) */}
+                                            {typeof f.confidence === 'number' && (
+                                                <span
+                                                    className="px-2 py-0.5 bg-white/5 text-gray-400 rounded text-[10px] font-medium"
+                                                    title="Reviewer confidence"
+                                                >
+                                                    {Math.round(f.confidence * 100)}%
                                                 </span>
                                             )}
                                         </div>
@@ -838,7 +967,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                         </div>
 
                                         {/* Action Buttons */}
-                                        <div className="flex flex-col gap-1.5 min-w-fit">
+                                        <div className="flex flex-col gap-1.5 min-w-fit" onClick={(e) => e.stopPropagation()}>
                                             {f.status === 'OPEN' && (
                                                 <>
                                                     <button
@@ -921,6 +1050,15 @@ export default function Dashboard({ user }: DashboardProps) {
                                     )}
                                 </div>
                             ))}
+                        </div>
+                        {showDocViewer && (
+                            <div className="lg:sticky lg:top-20 self-start space-y-2">
+                                <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                                    <Crosshair className="h-3.5 w-3.5" /> Click any finding to locate it in the document.
+                                </p>
+                                <DocumentViewer file={selectedFile} highlight={viewerHighlight} highlightNonce={highlightNonce} />
+                            </div>
+                        )}
                         </div>
                     </div>
                 )}

@@ -11,12 +11,13 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
-from pathlib import Path
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 from supabase import create_client, Client
 
 from doc_parser import parse_document, parse_excel, get_document_summary
+from page_locator import enrich_pages
 from review_engine import (
     create_ollama_client,
     create_failover_client,
@@ -26,17 +27,24 @@ from review_engine import (
     SEVERITY_LEVELS,
 )
 from report_generator import generate_excel_report
-from kimi_style_analyzer.analyze import (
-    CATEGORIES as MAX_REVIEW_CATEGORIES,
-    run_local_checks as run_max_local_checks,
-    run_llm_review as run_max_llm_review,
-    run_vision_review as run_max_vision_review,
-    validate_and_dedupe as validate_max_findings,
-    write_excel as write_max_excel_report,
-)
 
 app = Flask(__name__)
-CORS(app)
+# Restrict CORS via env in production (comma-separated origins); defaults to open
+# for local/dev so behavior is unchanged until ALLOWED_ORIGINS is set.
+_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*")
+CORS(app, origins="*" if _allowed_origins.strip() == "*" else [o.strip() for o in _allowed_origins.split(",") if o.strip()])
+
+# Cap upload size (default 50 MB) to avoid memory-exhaustion uploads.
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "50")) * 1024 * 1024
+
+
+def _safe_under(directory, filename):
+    """Resolve `filename` under `directory`, refusing path traversal. None if unsafe."""
+    base = os.path.realpath(directory)
+    candidate = os.path.realpath(os.path.join(base, os.path.basename(filename)))
+    if os.path.commonpath([candidate, base]) != base:
+        return None
+    return candidate
 
 # Store active reviews and reports in memory
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -44,26 +52,9 @@ REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-# Task Queue setup
-# Cloud environments use threading (NOT Huey immediate mode which blocks the HTTP request)
-# Local environments use Huey with Redis or Sqlite for crash recovery
-IS_CLOUD_ENV = os.environ.get("RENDER") or os.environ.get("FLY_APP_NAME") or os.environ.get("HEROKU_APP_NAME") or os.environ.get("GCP_PROJECT")
-USE_THREADING = True  # Set to True locally as well so no separate worker is needed!
-
-if not USE_THREADING:
-    try:
-        import redis as _redis
-        _redis.Redis(host='localhost', socket_connect_timeout=1).ping()
-        from huey import RedisHuey
-        huey_queue = RedisHuey('docai_tasks', host='localhost')
-        print(f"[*] Task Queue: RedisHuey (crash-proof local queue)")
-    except Exception:
-        from huey import SqliteHuey
-        huey_queue = SqliteHuey(filename=os.path.join(UPLOAD_DIR, 'huey_tasks.db'))
-        print(f"[*] Task Queue: SqliteHuey (persistent local queue - run start_worker.bat)")
-else:
-    huey_queue = None
-    print(f"[*] Task Queue: Threading (cloud mode - progress polling works correctly)")
+# Background execution: in-process threads (single-worker). Phase 2 replaces this
+# with a durable Redis+RQ queue + a reviews DB table for crash-safe, multi-worker
+# operation. The dead Huey/Redis scaffolding has been removed.
 
 # Supabase Configuration (Pull from Env)
 SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL")
@@ -135,15 +126,20 @@ def index():
     return render_template("index.html")
 
 
+def _requires_api_key(host):
+    """Only the Ollama Cloud host needs an API key; local/self-hosted/on-prem don't."""
+    return "ollama.com" in (host or "").lower()
+
+
 @app.route("/api/check-ollama", methods=["POST"])
 def check_ollama():
-    """Test connection to Ollama Cloud API."""
+    """Test connection to an Ollama host (local or cloud)."""
     data = request.get_json()
     api_key = data.get("api_key", "")
     host = data.get("host", "https://ollama.com")
 
-    if not api_key:
-        return jsonify({"success": False, "error": "API key is required"})
+    if not api_key and _requires_api_key(host):
+        return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
 
     result = test_connection(api_key, host)
     return jsonify(result)
@@ -151,19 +147,19 @@ def check_ollama():
 
 @app.route("/api/models", methods=["POST"])
 def list_models():
-    """List available models from Ollama Cloud."""
+    """List available models from an Ollama host (local or cloud)."""
     data = request.get_json()
     api_key = data.get("api_key", "")
     host = data.get("host", "https://ollama.com")
 
-    if not api_key:
-        return jsonify({"success": False, "error": "API key is required"})
+    if not api_key and _requires_api_key(host):
+        return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
 
     result = test_connection(api_key, host)
     return jsonify(result)
 
 
-FEEDBACK_EMAIL = "yash.badgujar@getmysolutions.in"
+FEEDBACK_EMAIL = os.environ.get("FEEDBACK_EMAIL", "")
 
 @app.route("/api/feedback", methods=["POST"])
 def submit_feedback():
@@ -258,44 +254,15 @@ Message:
     return jsonify({"success": True, "message": "Feedback received"})
 
 
-def _convert_max_findings_for_ui(max_findings):
-    """Convert Kimi-style Finding objects into the existing UI/report state shape."""
-    severity_map = {"High": "CRITICAL", "Medium": "MAJOR", "Low": "MINOR"}
-    converted = []
-    for idx, finding in enumerate(max_findings, 1):
-        converted.append({
-            "id": idx,
-            "page": "-",
-            "section": finding.location,
-            "comment": f"{finding.description}\n\nDetails: {finding.details}" + (f"\n\nEvidence: {finding.evidence}" if finding.evidence else ""),
-            "fix": "Review and correct the cited document content. Use the evidence/details fields in the Max report for the exact issue.",
-            "category": finding.category,
-            "severity": severity_map.get(finding.severity, "MAJOR"),
-            "fix_type": "MANUAL",
-            "status": "OPEN",
-            "source": finding.source,
-        })
-    return converted
-
-
-def _category_name_for_mode(category_key, review_mode):
-    if review_mode == "max":
-        return category_key
+def _category_name_for_mode(category_key, review_mode=None):
     return REVIEW_CATEGORIES.get(category_key, {}).get("name", category_key)
 
 
-def _category_icon_for_mode(category_key, review_mode):
-    if review_mode == "max":
-        return MAX_REVIEW_CATEGORIES.get(category_key, "")
+def _category_icon_for_mode(category_key, review_mode=None):
     return REVIEW_CATEGORIES.get(category_key, {}).get("icon", "")
 
 
-def _categories_for_mode(review_mode):
-    if review_mode == "max":
-        return {
-            name: {"name": name, "icon": icon, "description": "Max-mode engineering review category"}
-            for name, icon in MAX_REVIEW_CATEGORIES.items()
-        }
+def _categories_for_mode(review_mode=None):
     return {
         k: {"name": v["name"], "icon": v["icon"], "description": v["description"]}
         for k, v in REVIEW_CATEGORIES.items()
@@ -321,6 +288,12 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             parsed = parse_excel(filepath)
         else:
             parsed = parse_document(filepath)
+            # Replace heuristic page numbers with PDF-accurate ones when a
+            # renderer (Gotenberg/LibreOffice) is available; safe no-op otherwise.
+            try:
+                enrich_pages(parsed, filepath)
+            except Exception as e:
+                print(f"Page enrichment skipped: {e}")
         store = _load_store()
         store[review_id].update({
             "progress": 20,
@@ -352,23 +325,16 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             })
             _save_store(s)
 
-        # Run review
-        max_mode_findings = None
-        if review_mode == "max":
-            if file_type == "excel":
-                raise ValueError("Max mode currently supports Word documents only. Use Normal or Pro for Excel files.")
-            progress_cb("Max mode: running strict local checks...", 28)
-            max_mode_findings = run_max_local_checks(parsed)
-            progress_cb(f"Max mode: {len(max_mode_findings)} local findings. Running deep LLM review...", 40)
-            max_mode_findings.extend(run_max_llm_review(client, model, parsed))
-            if vision_model:
-                progress_cb("Max mode: running vision review on diagrams/images...", 78)
-                max_mode_findings.extend(run_max_vision_review(client, vision_model, parsed))
-            progress_cb("Max mode: validating evidence and removing weak findings...", 88)
-            max_mode_findings = validate_max_findings(max_mode_findings, parsed)
-            findings = _convert_max_findings_for_ui(max_mode_findings)
-        else:
-            findings = review_document(client, model, parsed, progress_callback=progress_cb, review_mode=review_mode, vision_model=vision_model)
+        # Run review — single unified engine. `review_mode` acts as a strictness
+        # knob (normal < pro < max); max is pro + a high-confidence filter.
+        engine_status = {}
+        findings = review_document(
+            client, model, parsed,
+            progress_callback=progress_cb,
+            review_mode=review_mode,
+            vision_model=vision_model,
+            status_out=engine_status,
+        )
 
         # Generate report
         store = _load_store()
@@ -379,15 +345,13 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         _save_store(store)
 
         mode_suffix = {"normal": "Normal", "pro": "Pro", "max": "Max"}.get(review_mode, "Pro")
+        report_base = secure_filename(os.path.splitext(original_filename)[0]) or "document"
         report_filename = (
-            f"Review_Report_{os.path.splitext(original_filename)[0]}"
+            f"Review_Report_{report_base}"
             f"_{mode_suffix}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         )
         report_path = os.path.join(REPORTS_DIR, report_filename)
-        if review_mode == "max" and max_mode_findings is not None:
-            write_max_excel_report(max_mode_findings, Path(report_path))
-        else:
-            generate_excel_report(findings, original_filename, report_path)
+        generate_excel_report(findings, original_filename, report_path)
 
         # Build stats
         severity_counts = {}
@@ -414,6 +378,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             "report_filename": report_filename,
             "review_mode": review_mode,
             "original_filepath": filepath,
+            "engine_status": engine_status,
             "document_info": {
                 "filename": original_filename,
                 "words": parsed["statistics"]["total_words"],
@@ -476,14 +441,12 @@ def start_review():
     review_mode = request.form.get("review_mode", "pro")
     file_type = request.form.get("file_type", "doc")
 
-    if not api_key:
-        return jsonify({"success": False, "error": "API key is required"})
+    if not api_key and _requires_api_key(host):
+        return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
     if not model:
         return jsonify({"success": False, "error": "Model selection is required"})
     if review_mode not in {"normal", "pro", "max"}:
         return jsonify({"success": False, "error": f"Invalid review mode: {review_mode}"})
-    if review_mode == "max" and file_type == "excel":
-        return jsonify({"success": False, "error": "Max mode currently supports Word documents only. Use Normal or Pro for Excel files."})
 
     if "document" not in request.files:
         return jsonify({"success": False, "error": "No document file provided"})
@@ -499,9 +462,10 @@ def start_review():
         if not file.filename.lower().endswith((".docx", ".doc")):
             return jsonify({"success": False, "error": "Only .docx or .doc files are supported for Document mode"})
 
-    # Save uploaded file
+    # Save uploaded file under a sanitized name (prevents path traversal, B1).
     review_id = str(uuid.uuid4())[:8]
-    filename = f"{review_id}_{file.filename}"
+    safe_name = secure_filename(file.filename) or "document"
+    filename = f"{review_id}_{safe_name}"
     filepath = os.path.join(UPLOAD_DIR, filename)
     file.save(filepath)
 
@@ -514,20 +478,13 @@ def start_review():
     }
     _save_store(store)
 
-    # Dispatch to background thread (allows progress polling to work)
-    if USE_THREADING:
-        thread = threading.Thread(
-            target=_run_review_in_background,
-            args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model),
-            daemon=True
-        )
-        thread.start()
-    else:
-        # Local with Huey — decorate dynamically
-        huey_task = huey_queue.task(retries=1, retry_delay=5)(_run_review_in_background)
-        huey_task(
-            review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model
-        )
+    # Dispatch to a background thread so progress polling works.
+    thread = threading.Thread(
+        target=_run_review_in_background,
+        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model),
+        daemon=True,
+    )
+    thread.start()
 
     return jsonify({"success": True, "review_id": review_id})
 
@@ -633,10 +590,12 @@ def download_report(report_filename):
             owner_review = rdata
             break
 
-    report_path = os.path.join(REPORTS_DIR, report_filename)
+    report_path = _safe_under(REPORTS_DIR, report_filename)
+    if not report_path:
+        return jsonify({"error": "Invalid report name"}), 400
 
-    # If we found the review, regenerate with latest statuses
-    if owner_review and owner_review.get("findings") and owner_review.get("review_mode") != "max":
+    # If we found the review, regenerate with latest statuses (all modes use one report).
+    if owner_review and owner_review.get("findings"):
         try:
             findings = owner_review["findings"]
             doc_name = owner_review.get("document_info", {}).get("filename", "Unknown")
@@ -648,7 +607,7 @@ def download_report(report_filename):
         return send_file(
             report_path,
             as_attachment=True,
-            download_name=report_filename,
+            download_name=os.path.basename(report_filename),
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     return jsonify({"error": "Report not found"}), 404
@@ -657,12 +616,14 @@ def download_report(report_filename):
 @app.route("/api/download-fixed/<filename>")
 def download_fixed_doc(filename):
     """Download the auto-fixed document."""
-    fixed_path = os.path.join(REPORTS_DIR, filename)
+    fixed_path = _safe_under(REPORTS_DIR, filename)
+    if not fixed_path:
+        return jsonify({"error": "Invalid file name"}), 400
     if os.path.exists(fixed_path):
         return send_file(
             fixed_path,
             as_attachment=True,
-            download_name=filename,
+            download_name=os.path.basename(filename),
         )
     return jsonify({"error": "Fixed document not found"}), 404
 
