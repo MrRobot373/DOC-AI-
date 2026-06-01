@@ -443,7 +443,14 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         if review_mode == "max":
             findings = [f for f in findings if float(f.get("confidence", 1.0)) >= 0.5]
         findings = _deduplicate_findings(findings)
-        findings.sort(key=lambda f: SEVERITY_LEVELS.get(f.get("severity", "MINOR"), {}).get("weight", 0), reverse=True)
+        # Sort by severity, then confidence — most trustworthy issues first.
+        findings.sort(
+            key=lambda f: (
+                SEVERITY_LEVELS.get(f.get("severity", "MINOR"), {}).get("weight", 0),
+                float(f.get("confidence", 0) or 0),
+            ),
+            reverse=True,
+        )
 
     # Number findings and assign fix_type
     for idx, f in enumerate(findings, 1):
