@@ -1920,6 +1920,52 @@ def _deduplicate_findings(findings):
     return unique
 
 
+def _findings_match(a, b):
+    """True if two findings describe the same issue (same category + similar text/evidence)."""
+    if a.get("category") != b.get("category"):
+        return False
+    a_ev, b_ev = _norm_text(a.get("evidence", "")), _norm_text(b.get("evidence", ""))
+    if a_ev and b_ev and (a_ev in b_ev or b_ev in a_ev):
+        return True
+    ratio = difflib.SequenceMatcher(None, _norm_text(a.get("comment", "")), _norm_text(b.get("comment", ""))).ratio()
+    return ratio > 0.6
+
+
+def diff_findings(old_findings, new_findings):
+    """
+    Compare two reviews of (different versions of) a document.
+
+    Returns {"new": [...], "fixed": [...], "unchanged": [...]}:
+      - new       — in the new review but not the old (newly introduced issues)
+      - fixed     — in the old review but not the new (resolved since last time)
+      - unchanged — present in both
+    """
+    old = list(old_findings or [])
+    new = list(new_findings or [])
+    matched_old = set()
+    result = {"new": [], "fixed": [], "unchanged": []}
+
+    for nf in new:
+        hit = None
+        for i, of in enumerate(old):
+            if i in matched_old:
+                continue
+            if _findings_match(nf, of):
+                hit = i
+                break
+        if hit is not None:
+            matched_old.add(hit)
+            result["unchanged"].append(nf)
+        else:
+            result["new"].append(nf)
+
+    for i, of in enumerate(old):
+        if i not in matched_old:
+            result["fixed"].append(of)
+
+    return result
+
+
 # ============================================================
 # TOC & HEADING STRUCTURE CHECKS
 # ============================================================

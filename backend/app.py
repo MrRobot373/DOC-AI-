@@ -32,6 +32,7 @@ from review_engine import (
     create_failover_client,
     test_connection,
     review_document,
+    diff_findings,
     REVIEW_CATEGORIES,
     SEVERITY_LEVELS,
 )
@@ -729,6 +730,42 @@ def get_progress(review_id):
         "status": data["status"],
         "message": data["message"],
         "progress": data["progress"],
+    })
+
+
+@app.route("/api/compare")
+@require_auth
+def compare_reviews():
+    """Diff two completed reviews: which findings are NEW, FIXED, or UNCHANGED."""
+    old_id = request.args.get("old")
+    new_id = request.args.get("new")
+    store = _load_store()
+
+    def _findings_for(rid):
+        d = store.get(rid)
+        if d and d.get("findings") is not None:
+            return d["findings"]
+        # Fall back to Supabase if not in the local store
+        if supabase:
+            try:
+                r = supabase.table("reviews").select("findings").eq("id", rid).single().execute()
+                if r.data:
+                    return r.data.get("findings") or []
+            except Exception:
+                pass
+        return None
+
+    old_f = _findings_for(old_id)
+    new_f = _findings_for(new_id)
+    if old_f is None or new_f is None:
+        return jsonify({"error": "One or both reviews not found"}), 404
+
+    result = diff_findings(old_f, new_f)
+    return jsonify({
+        "new": result["new"],
+        "fixed": result["fixed"],
+        "unchanged": result["unchanged"],
+        "summary": {"new": len(result["new"]), "fixed": len(result["fixed"]), "unchanged": len(result["unchanged"])},
     })
 
 
