@@ -146,11 +146,16 @@ def assign_pages(parsed: dict, page_texts: list) -> dict:
     return parsed
 
 
-def enrich_pages(parsed: dict, docx_path: str, gotenberg_url=None, timeout: int = 120) -> dict:
+def enrich_pages(parsed: dict, docx_path: str, gotenberg_url=None,
+                  timeout: int = 120, pdf_save_dir: str = None) -> dict:
     """
     Render the DOCX to PDF and reassign page numbers from the rendered pages.
     Falls back to the existing heuristic pages when no renderer is available.
     Records parsed['metadata']['page_source'] = gotenberg|soffice|heuristic.
+
+    If `pdf_save_dir` is given and rendering succeeds, saves the PDF there so
+    it can later be served to the browser for the PDF.js viewer. The saved
+    filename is stored in parsed['metadata']['pdf_filename'].
     """
     parsed.setdefault("metadata", {})
     gotenberg_url = gotenberg_url or os.environ.get("GOTENBERG_URL")
@@ -167,4 +172,18 @@ def enrich_pages(parsed: dict, docx_path: str, gotenberg_url=None, timeout: int 
 
     assign_pages(parsed, page_texts)
     parsed["metadata"]["page_source"] = source
+
+    # Persist the PDF so the viewer can serve it.
+    if pdf_save_dir and pdf_bytes:
+        try:
+            os.makedirs(pdf_save_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(docx_path))[0]
+            pdf_name = f"{base}_rendered.pdf"
+            pdf_path = os.path.join(pdf_save_dir, pdf_name)
+            with open(pdf_path, "wb") as fh:
+                fh.write(pdf_bytes)
+            parsed["metadata"]["pdf_filename"] = pdf_name
+        except Exception as e:
+            print(f"[page_locator] PDF save failed: {e}")
+
     return parsed

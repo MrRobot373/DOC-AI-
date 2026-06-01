@@ -11,6 +11,15 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+import functools
+
+# Load .env when present (dev convenience; prod uses real env vars).
+try:
+    from dotenv import load_dotenv as _ld
+    _ld(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -56,16 +65,94 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 # with a durable Redis+RQ queue + a reviews DB table for crash-safe, multi-worker
 # operation. The dead Huey/Redis scaffolding has been removed.
 
-# Supabase Configuration (Pull from Env)
-SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("VITE_SUPABASE_ANON_KEY") # Use Service Role if possible in production
+# Supabase Configuration
+# Use Service Role key for backend (bypasses RLS, is authoritative).
+# Falls back to Anon key so dev setups still work.
+SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL") or os.environ.get("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_KEY = SUPABASE_SERVICE_KEY or os.environ.get("VITE_SUPABASE_ANON_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
 
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("[*] Supabase: connected")
     except Exception as e:
         print(f"Supabase init error: {e}")
+else:
+    print("[*] Supabase: not configured — using local JSON state only")
+
+
+# ── JWT Auth helper ─────────────────────────────────────────────────────────
+def _get_user_id_from_token():
+    """
+    Extract user_id from the Supabase Bearer JWT in the request.
+    Returns None when auth is not configured (on-prem/local mode) —
+    caller treats None as "unauthenticated but allowed in local mode".
+    """
+    if not SUPABASE_URL:
+        return None  # local/on-prem mode — no auth required
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header[7:].strip()
+
+    # Prefer local JWT decode when the secret is configured (no network round-trip).
+    if SUPABASE_JWT_SECRET:
+        try:
+            import jwt as pyjwt
+            payload = pyjwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"],
+                                   options={"verify_aud": False})
+            return payload.get("sub")
+        except Exception:
+            return None
+
+    # Fallback: ask Supabase to verify (adds a small round-trip).
+    if supabase:
+        try:
+            user = supabase.auth.get_user(token)
+            return user.user.id if user and user.user else None
+        except Exception:
+            return None
+    return None
+
+
+def require_auth(fn):
+    """
+    Decorator: gate an endpoint behind Supabase auth.
+    When Supabase is not configured (SUPABASE_URL unset) the endpoint is
+    allowed through so on-prem deployments work without login.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if SUPABASE_URL:  # auth is enabled
+            uid = _get_user_id_from_token()
+            if not uid:
+                return jsonify({"error": "Unauthorized"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+# ── Per-review Supabase upsert ───────────────────────────────────────────────
+def _supabase_upsert_review(review_id, user_id, data):
+    """Write/update a single review row in the Supabase reviews table."""
+    if not supabase:
+        return
+    try:
+        row = {
+            "id": review_id,
+            "user_id": user_id or "00000000-0000-0000-0000-000000000000",
+            **{k: data[k] for k in (
+                "status", "progress", "message", "review_mode",
+                "document_info", "findings", "summary", "report_filename",
+                "pdf_filename", "engine_status", "error", "original_filepath",
+            ) if k in data},
+        }
+        supabase.table("reviews").upsert(row).execute()
+    except Exception as e:
+        print(f"Supabase review upsert error: {e}")
 
 # In-memory fallback (now with Supabase sync)
 STATE_FILE = os.path.join(UPLOAD_DIR, "review_state.json")
@@ -269,7 +356,7 @@ def _categories_for_mode(review_mode=None):
     }
 
 
-def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None):
+def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None, user_id=None):
     """Background worker that runs the full document review."""
     store = _load_store()
     try:
@@ -277,12 +364,10 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         if review_id not in store:
             store[review_id] = {}
         
-        store[review_id].update({
-            "status": "parsing",
-            "message": "Parsing document...",
-            "progress": 10
-        })
+        parsing_update = {"status": "parsing", "message": "Parsing document...", "progress": 10}
+        store[review_id].update(parsing_update)
         _save_store(store)
+        _supabase_upsert_review(review_id, user_id, parsing_update)
 
         if file_type == "excel":
             parsed = parse_excel(filepath)
@@ -291,7 +376,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             # Replace heuristic page numbers with PDF-accurate ones when a
             # renderer (Gotenberg/LibreOffice) is available; safe no-op otherwise.
             try:
-                enrich_pages(parsed, filepath)
+                enrich_pages(parsed, filepath, pdf_save_dir=REPORTS_DIR)
             except Exception as e:
                 print(f"Page enrichment skipped: {e}")
         store = _load_store()
@@ -376,6 +461,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             "message": "Review complete!",
             "progress": 100,
             "report_filename": report_filename,
+            "pdf_filename": parsed.get("metadata", {}).get("pdf_filename"),
             "review_mode": review_mode,
             "original_filepath": filepath,
             "engine_status": engine_status,
@@ -406,16 +492,15 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             },
         })
         _save_store(store)
+        _supabase_upsert_review(review_id, user_id, store[review_id])
 
     except Exception as e:
         store = _load_store()
         if review_id in store:
-            store[review_id].update({
-                "status": "error",
-                "message": str(e),
-                "progress": 0,
-            })
+            err_update = {"status": "error", "message": str(e), "progress": 0}
+            store[review_id].update(err_update)
             _save_store(store)
+            _supabase_upsert_review(review_id, user_id, err_update)
     finally:
         # Keep uploaded file for 24h for potential auto-fix application
         # Schedule cleanup after 24h instead of immediate deletion
@@ -432,6 +517,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
 
 
 @app.route("/api/review", methods=["POST"])
+@require_auth
 def start_review():
     """Upload a document and start the review process in background."""
     api_key = request.form.get("api_key", "")
@@ -464,24 +550,23 @@ def start_review():
 
     # Save uploaded file under a sanitized name (prevents path traversal, B1).
     review_id = str(uuid.uuid4())[:8]
+    user_id = _get_user_id_from_token()
     safe_name = secure_filename(file.filename) or "document"
     filename = f"{review_id}_{safe_name}"
     filepath = os.path.join(UPLOAD_DIR, filename)
     file.save(filepath)
 
     # Initialize progress
+    initial = {"status": "starting", "message": "Uploading document...", "progress": 5}
     store = _load_store()
-    store[review_id] = {
-        "status": "starting",
-        "message": "Uploading document...",
-        "progress": 5,
-    }
+    store[review_id] = initial
     _save_store(store)
+    _supabase_upsert_review(review_id, user_id, initial)
 
     # Dispatch to a background thread so progress polling works.
     thread = threading.Thread(
         target=_run_review_in_background,
-        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model),
+        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model, user_id),
         daemon=True,
     )
     thread.start()
@@ -490,6 +575,7 @@ def start_review():
 
 
 @app.route("/api/progress/<review_id>")
+@require_auth
 def get_progress(review_id):
     """Get the progress/result of a review."""
     store = _load_store()
@@ -515,6 +601,7 @@ def get_progress(review_id):
 
 
 @app.route("/api/update-finding/<review_id>", methods=["POST"])
+@require_auth
 def update_finding(review_id):
     """Update a finding's status (Accept/Reject/Working)."""
     data = request.get_json()
@@ -545,6 +632,7 @@ def update_finding(review_id):
 
 
 @app.route("/api/apply-fixes/<review_id>", methods=["POST"])
+@require_auth
 def apply_fixes(review_id):
     """Apply auto-fixable findings to a copy of the document."""
     store = _load_store()
@@ -580,6 +668,7 @@ def apply_fixes(review_id):
 
 
 @app.route("/api/download/<report_filename>")
+@require_auth
 def download_report(report_filename):
     """Download a generated Excel report (regenerated with latest statuses)."""
     # Find the review that owns this report
@@ -614,6 +703,7 @@ def download_report(report_filename):
 
 
 @app.route("/api/download-fixed/<filename>")
+@require_auth
 def download_fixed_doc(filename):
     """Download the auto-fixed document."""
     fixed_path = _safe_under(REPORTS_DIR, filename)
@@ -626,6 +716,26 @@ def download_fixed_doc(filename):
             download_name=os.path.basename(filename),
         )
     return jsonify({"error": "Fixed document not found"}), 404
+
+
+@app.route("/api/pdf/<review_id>")
+@require_auth
+def serve_pdf(review_id):
+    """Serve the Gotenberg/soffice-rendered PDF for the PDF.js viewer."""
+    store = _load_store()
+    data = store.get(review_id, {})
+    if not data:
+        return jsonify({"error": "Review not found"}), 404
+
+    pdf_filename = data.get("pdf_filename")
+    if not pdf_filename:
+        return jsonify({"error": "No rendered PDF available for this review — page locator used heuristic mode"}), 404
+
+    pdf_path = _safe_under(REPORTS_DIR, pdf_filename)
+    if not pdf_path or not os.path.exists(pdf_path):
+        return jsonify({"error": "PDF file not found on disk"}), 404
+
+    return send_file(pdf_path, mimetype="application/pdf")
 
 
 if __name__ == "__main__":

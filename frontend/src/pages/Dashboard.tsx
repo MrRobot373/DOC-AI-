@@ -80,8 +80,20 @@ export default function Dashboard({ user }: DashboardProps) {
     const [highlightNonce, setHighlightNonce] = useState(0)
     const showDocViewer = fileType === "doc" && !!selectedFile && findings.length > 0
 
+    const [viewerTargetPage, setViewerTargetPage] = useState<number | undefined>(undefined)
+    const [viewerAuthToken, setViewerAuthToken] = useState<string | undefined>(undefined)
+
+    // Grab the current session token once for the viewer.
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data }) => {
+            setViewerAuthToken(data?.session?.access_token || undefined)
+        })
+    }, [])
+
     const handleFindingClick = (f: any) => {
         if (!showDocViewer) return
+        const page = typeof f.page === "number" ? f.page : parseInt(f.page, 10) || undefined
+        setViewerTargetPage(page)
         setViewerHighlight(f.evidence || f.comment || null)
         setHighlightNonce((n) => n + 1)
     }
@@ -114,9 +126,10 @@ export default function Dashboard({ user }: DashboardProps) {
         setLoadingModels(true)
         setModelsError(null)
         try {
+            const ah = await authHeaders()
             const resp = await fetch(`${API_BASE_URL}/api/models`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...ah },
                 body: JSON.stringify({ api_key: key, host }),
             })
             const data = await resp.json()
@@ -144,9 +157,11 @@ export default function Dashboard({ user }: DashboardProps) {
                 .single()
             if (data) {
                 const key = data.ollama_api_key || ""
-                const host = data.ollama_host_url || "https://ollama.com"
+                const host = data.ollama_host_url || LOCAL_OLLAMA
                 setApiKey(key)
                 setHostUrl(host)
+                if (data.selected_model) setSelectedModel(data.selected_model)
+                if (data.vision_model) setVisionModel(data.vision_model)
                 if (key || isLocalHost(host)) fetchModels(key, host)
             }
         }
@@ -158,18 +173,29 @@ export default function Dashboard({ user }: DashboardProps) {
         navigate("/")
     }
 
+    /** Returns Authorization header with the current Supabase JWT (if available). */
+    const authHeaders = async (): Promise<Record<string, string>> => {
+        const { data } = await supabase.auth.getSession()
+        const token = data?.session?.access_token
+        return token ? { Authorization: `Bearer ${token}` } : {}
+    }
+
     const handleSaveSettings = async () => {
         setSavingSettings(true)
         try {
             await supabase.from('user_settings').upsert({
                 user_id: user.id,
                 ollama_api_key: apiKey,
-                ollama_host_url: hostUrl
+                ollama_host_url: hostUrl,
+                ollama_runtime: runtimeIsLocal ? 'local' : 'cloud',
+                selected_model: selectedModel,
+                vision_model: visionModel,
             })
 
+            const ah = await authHeaders()
             const resp = await fetch(`${API_BASE_URL}/api/check-ollama`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...ah },
                 body: JSON.stringify({ api_key: apiKey, host: hostUrl })
             })
             const data = await resp.json()
@@ -242,8 +268,10 @@ export default function Dashboard({ user }: DashboardProps) {
         formData.append('file_type', fileType)
 
         try {
+            const ah = await authHeaders()
             const resp = await fetch(`${API_BASE_URL}/api/review`, {
                 method: 'POST',
+                headers: { ...ah },
                 body: formData,
             })
             const data = await resp.json()
@@ -258,7 +286,8 @@ export default function Dashboard({ user }: DashboardProps) {
 
             const poll = setInterval(async () => {
                 try {
-                    const sResp = await fetch(`${API_BASE_URL}/api/progress/${reviewId}`)
+                    const pollAh = await authHeaders()
+                    const sResp = await fetch(`${API_BASE_URL}/api/progress/${reviewId}`, { headers: pollAh })
                     const sData = await sResp.json()
 
                     if (sData.status === 'error') {
@@ -299,9 +328,10 @@ export default function Dashboard({ user }: DashboardProps) {
         if (!reviewId) return
         setUpdatingFindingId(findingId)
         try {
+            const ah = await authHeaders()
             const resp = await fetch(`${API_BASE_URL}/api/update-finding/${reviewId}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...ah },
                 body: JSON.stringify({ finding_id: findingId, status: newStatus })
             })
             const data = await resp.json()
@@ -321,9 +351,10 @@ export default function Dashboard({ user }: DashboardProps) {
         if (!reviewId) return
         setApplyingFixes(true)
         try {
+            const ah = await authHeaders()
             const resp = await fetch(`${API_BASE_URL}/api/apply-fixes/${reviewId}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...ah },
                 body: JSON.stringify({})
             })
             const data = await resp.json()
@@ -1056,7 +1087,15 @@ export default function Dashboard({ user }: DashboardProps) {
                                 <p className="text-xs text-gray-500 flex items-center gap-1.5">
                                     <Crosshair className="h-3.5 w-3.5" /> Click any finding to locate it in the document.
                                 </p>
-                                <DocumentViewer file={selectedFile} highlight={viewerHighlight} highlightNonce={highlightNonce} />
+                                <DocumentViewer
+                                    file={selectedFile}
+                                    reviewId={reviewId}
+                                    apiBase={API_BASE_URL}
+                                    authToken={viewerAuthToken}
+                                    targetPage={viewerTargetPage}
+                                    highlight={viewerHighlight}
+                                    highlightNonce={highlightNonce}
+                                />
                             </div>
                         )}
                         </div>
