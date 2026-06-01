@@ -154,6 +154,68 @@ def _supabase_upsert_review(review_id, user_id, data):
     except Exception as e:
         print(f"Supabase review upsert error: {e}")
 
+
+# ── Admin + shared-pool + audit helpers ──────────────────────────────────────
+def _is_admin(user_id):
+    """True if user_id is in the admin_users table (checked via service-role client)."""
+    if not supabase or not user_id:
+        return False
+    try:
+        r = supabase.table("admin_users").select("user_id").eq("user_id", user_id).execute()
+        return bool(r.data)
+    except Exception:
+        return False
+
+
+def require_admin(fn):
+    """Gate an endpoint behind admin membership."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        uid = _get_user_id_from_token()
+        if not uid or not _is_admin(uid):
+            return jsonify({"error": "Admin only"}), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def _user_uses_pool(user_id):
+    """Whether this user opted into the shared LLM key pool ('Auto' mode)."""
+    if not supabase or not user_id:
+        return False
+    try:
+        r = supabase.table("user_settings").select("use_pool").eq("user_id", user_id).single().execute()
+        return bool(r.data and r.data.get("use_pool"))
+    except Exception:
+        return False
+
+
+def _get_pool_key():
+    """Pick the highest-priority active key from the shared pool. None if empty."""
+    if not supabase:
+        return None
+    try:
+        r = (supabase.table("llm_pool_keys")
+             .select("*").eq("active", True)
+             .order("priority", desc=False).limit(1).execute())
+        return r.data[0] if r.data else None
+    except Exception as e:
+        print(f"Pool key fetch error: {e}")
+        return None
+
+
+def _log_audit(user_id, user_email, action, review_id=None, metadata=None):
+    """Best-effort audit log entry; never raises."""
+    if not supabase:
+        return
+    try:
+        supabase.table("audit_log").insert({
+            "user_id": user_id, "user_email": user_email, "action": action,
+            "review_id": review_id, "metadata": metadata or {},
+        }).execute()
+    except Exception as e:
+        print(f"Audit log error: {e}")
+
+
 # In-memory fallback (now with Supabase sync)
 STATE_FILE = os.path.join(UPLOAD_DIR, "review_state.json")
 
@@ -391,6 +453,19 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             "message": f"Document parsed: {parsed['statistics']['total_words']} words, {parsed['statistics']['total_sections']} sections. Starting AI review..."
         })
         _save_store(store)
+
+        # "Auto" mode: user opted into the shared admin pool — override the
+        # host/key/model with the highest-priority active pool key.
+        if user_id and _user_uses_pool(user_id):
+            pool = _get_pool_key()
+            if pool:
+                api_key = pool.get("api_key", "")
+                host = pool.get("host_url", host)
+                if pool.get("model_hint"):
+                    model = pool["model_hint"]
+                if pool.get("vision_model_hint"):
+                    vision_model = pool["vision_model_hint"]
+                print(f"[Pool] Using shared pool key '{pool.get('label') or pool.get('provider')}' for review {review_id}")
 
         # Create Ollama client (supports failover with multiple keys).
         # api_key may be empty for a local Ollama — create_ollama_client
@@ -745,6 +820,85 @@ def serve_pdf(review_id):
         return jsonify({"error": "PDF file not found on disk"}), 404
 
     return send_file(pdf_path, mimetype="application/pdf")
+
+
+# ============================================================
+# ADMIN ENDPOINTS
+# ============================================================
+@app.route("/api/admin/whoami")
+@require_auth
+def admin_whoami():
+    """Lets the frontend decide whether to show the admin panel."""
+    return jsonify({"is_admin": _is_admin(_get_user_id_from_token())})
+
+
+@app.route("/api/admin/users")
+@require_admin
+def admin_users():
+    """List all users with their review counts (admin dashboard)."""
+    if not supabase:
+        return jsonify({"users": []})
+    try:
+        users = supabase.auth.admin.list_users()
+        users_list = users if isinstance(users, list) else getattr(users, "users", [])
+        reviews = supabase.table("reviews").select("user_id, status").execute().data or []
+        counts = {}
+        for r in reviews:
+            counts[r["user_id"]] = counts.get(r["user_id"], 0) + 1
+        out = [{
+            "id": u.id, "email": u.email,
+            "created_at": str(getattr(u, "created_at", "")),
+            "review_count": counts.get(u.id, 0),
+        } for u in users_list]
+        return jsonify({"users": out})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/usage")
+@require_admin
+def admin_usage():
+    """Aggregate review counts per day + per user (admin dashboard)."""
+    if not supabase:
+        return jsonify({"usage": []})
+    try:
+        rows = supabase.table("audit_log").select("user_email, action, created_at").execute().data or []
+        return jsonify({"usage": rows[-500:]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/pool-keys", methods=["GET", "POST", "DELETE"])
+@require_admin
+def admin_pool_keys():
+    """Manage the shared LLM key pool (admin only)."""
+    if not supabase:
+        return jsonify({"error": "Supabase not configured"}), 400
+    try:
+        if request.method == "GET":
+            rows = supabase.table("llm_pool_keys").select(
+                "id, label, provider, host_url, model_hint, vision_model_hint, priority, active, created_at"
+            ).order("priority").execute().data or []
+            return jsonify({"keys": rows})  # api_key intentionally NOT returned
+        if request.method == "POST":
+            data = request.get_json() or {}
+            supabase.table("llm_pool_keys").insert({
+                "label": data.get("label"),
+                "provider": data.get("provider", "ollama_cloud"),
+                "host_url": data.get("host_url", "https://ollama.com"),
+                "api_key": data.get("api_key", ""),
+                "model_hint": data.get("model_hint"),
+                "vision_model_hint": data.get("vision_model_hint"),
+                "priority": int(data.get("priority", 0)),
+                "active": bool(data.get("active", True)),
+            }).execute()
+            return jsonify({"success": True})
+        if request.method == "DELETE":
+            key_id = request.args.get("id")
+            supabase.table("llm_pool_keys").delete().eq("id", key_id).execute()
+            return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

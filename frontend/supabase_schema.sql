@@ -104,3 +104,64 @@ CREATE TABLE IF NOT EXISTS public.feedback (
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 -- Feedback is admin-read-only; backend uses the service role key to insert.
+
+
+-- ── 5. Admin users ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.admin_users (
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+-- Seed the platform admin (runs once the user has signed up):
+INSERT INTO public.admin_users (user_id)
+SELECT id FROM auth.users WHERE email = 'yash.badgujar@getmysolutions.in'
+ON CONFLICT DO NOTHING;
+
+ALTER TABLE public.admin_users ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Admins read admin list" ON public.admin_users;
+CREATE POLICY "Admins read admin list" ON public.admin_users FOR SELECT
+  USING ((SELECT COUNT(*) FROM public.admin_users a WHERE a.user_id = auth.uid()) > 0);
+
+
+-- ── 6. Shared LLM key pool (managed by admin) ───────────────
+CREATE TABLE IF NOT EXISTS public.llm_pool_keys (
+  id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  label      TEXT,
+  provider   TEXT NOT NULL,            -- 'ollama_cloud' | 'freellmapi' | 'openai_compat'
+  host_url   TEXT NOT NULL,
+  api_key    TEXT NOT NULL,
+  model_hint TEXT,                     -- default model name for this key
+  vision_model_hint TEXT,
+  priority   INT DEFAULT 0,            -- lower = tried first
+  active     BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+ALTER TABLE public.llm_pool_keys ENABLE ROW LEVEL SECURITY;
+-- Only admins can see/manage pool keys via the client; the backend reads them
+-- with the service-role key (bypasses RLS) when running a pooled review.
+DROP POLICY IF EXISTS "Admins manage pool keys" ON public.llm_pool_keys;
+CREATE POLICY "Admins manage pool keys" ON public.llm_pool_keys FOR ALL
+  USING ((SELECT COUNT(*) FROM public.admin_users a WHERE a.user_id = auth.uid()) > 0)
+  WITH CHECK ((SELECT COUNT(*) FROM public.admin_users a WHERE a.user_id = auth.uid()) > 0);
+
+
+-- ── 7. user_settings: opt into the shared pool ("Auto" mode) ─
+ALTER TABLE public.user_settings ADD COLUMN IF NOT EXISTS use_pool BOOLEAN DEFAULT false;
+ALTER TABLE public.user_settings ADD COLUMN IF NOT EXISTS glossary_json JSONB;
+ALTER TABLE public.user_settings ADD COLUMN IF NOT EXISTS notify_email BOOLEAN DEFAULT false;
+
+
+-- ── 8. Usage / audit log ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.audit_log (
+  id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id    UUID,
+  user_email TEXT,
+  action     TEXT,                     -- review_start | review_done | download | fix_applied
+  review_id  TEXT,
+  metadata   JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+ALTER TABLE public.audit_log ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Own or admin reads audit" ON public.audit_log;
+CREATE POLICY "Own or admin reads audit" ON public.audit_log FOR SELECT
+  USING (auth.uid() = user_id
+    OR (SELECT COUNT(*) FROM public.admin_users a WHERE a.user_id = auth.uid()) > 0);
