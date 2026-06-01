@@ -400,11 +400,11 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
             progress_callback(f"Found {len(local_findings)} issues from automated checks. Starting AI analysis...", 12)
 
         # ── STEP 2: LLM-powered multi-pass review ──
-        from doc_parser import get_document_summary, get_section_chunks
+        from doc_parser import get_document_summary, get_section_chunks_smart
 
         doc_summary = get_document_summary(parsed_doc)
         glossary_text = format_glossary(load_glossary())
-        chunks = get_section_chunks(parsed_doc, max_chars=5000)
+        chunks = get_section_chunks_smart(parsed_doc, target_chars=8000)
         total_chunks = len(chunks)
 
         # Pass A — Text Quality + Technical combined (per chunk)
@@ -952,10 +952,11 @@ def _check_table_duplication(parsed_doc):
     table_hashes = []
     for tbl in tables:
         rows = tbl.get("rows", [])
-        # Hash the first 50 rows of content
+        # Hash ALL rows — two large tables that differ only after row 50 must not
+        # be mistaken for duplicates (and vice versa).
         content = "||".join(
             "|".join(cell.strip().lower() for cell in row)
-            for row in rows[:50]
+            for row in rows
         )
         h = hashlib.md5(content.encode()).hexdigest()
         table_hashes.append({
@@ -1302,7 +1303,7 @@ def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
         for tbl in batch:
             tbl_name = tbl.get("name", f"Table {tbl['index'] + 1}")
             rows_str = "\n".join(
-                f"  Row {i}: {' | '.join(c[:150] for c in row)}"
+                f"  Row {i}: {' | '.join(c[:400] for c in row)}"
                 for i, row in enumerate(tbl["rows"])  # ALL rows, no cap
             )
             tables_text.append(f"--- {tbl_name} ({tbl['num_rows']}×{tbl['num_cols']}) ---\n{rows_str}")
@@ -1364,10 +1365,10 @@ def _review_images_with_llm(client, model, parsed_doc, doc_summary="", progress_
         heading = section.get("heading", "Unknown")
         paragraphs_text = " ".join(p["text"] for p in section.get("paragraphs", []) if p.get("text"))
         if paragraphs_text:
-            all_text_by_section[heading] = paragraphs_text[:1500]  # Cap per section
+            all_text_by_section[heading] = paragraphs_text  # full section text for image cross-ref
     
-    # Build surrounding text context — all sections, not a capped slice
-    nearby_text = "\n".join([f"[{h}]: {t[:500]}" for h, t in all_text_by_section.items()])
+    # Build surrounding text context — all sections, full text (no per-section slice)
+    nearby_text = "\n".join([f"[{h}]: {t}" for h, t in all_text_by_section.items()])
 
     # Review ALL non-trivial images — no arbitrary cap.
     # Per-image errors are caught individually so one failure never stops the rest.
@@ -1681,8 +1682,8 @@ def _critic_filter_findings(client, model, findings, progress_callback=None, bat
             {
                 "id": i,
                 "category": f.get("category", ""),
-                "claim": f.get("comment", "")[:400],
-                "evidence": f.get("evidence", "")[:300],
+                "claim": f.get("comment", "")[:800],
+                "evidence": f.get("evidence", "")[:600],
             }
             for i, f in enumerate(batch)
         ]
