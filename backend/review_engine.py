@@ -190,13 +190,24 @@ def _chat_findings(client, model, prompt, source, images=None, num_predict=4096)
 # ============================================================
 # OLLAMA CLIENT
 # ============================================================
+VISION_MODEL_HINTS = (
+    "vl", "vision", "llava", "bakllava", "minicpm-v", "moondream",
+)
+
+
+def is_vision_model(name):
+    """Heuristic: does this Ollama model accept images? Used to gate the vision pass."""
+    n = (name or "").lower()
+    return any(h in n for h in VISION_MODEL_HINTS)
+
+
 def create_ollama_client(api_key, host="https://ollama.com"):
-    """Create an Ollama client with cloud API authentication."""
-    client = Client(
-        host=host,
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    return client
+    """
+    Create an Ollama client. Sends a Bearer token only when an API key is given,
+    so a LOCAL Ollama (http://localhost:11434, no key) works the same as cloud.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    return Client(host=host, headers=headers)
 
 
 class FailoverOllamaClient:
@@ -260,7 +271,11 @@ def test_connection(api_key, host="https://ollama.com"):
             model_names = [m.model for m in models.models]
         elif isinstance(models, dict) and "models" in models:
             model_names = [m.get("name", m.get("model", "unknown")) for m in models["models"]]
-        return {"success": True, "models": model_names}
+        return {
+            "success": True,
+            "models": model_names,
+            "vision_models": [m for m in model_names if is_vision_model(m)],
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -380,7 +395,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
                 _record("tables", False, error=str(e))
 
         # ── STEP 5: Image-specific review (use vision model) ──
-        if parsed_doc.get("images") and any(m in img_model.lower() for m in ["vl", "vision", "llava", "qwen"]):
+        if parsed_doc.get("images") and is_vision_model(img_model):
             total_images = min(len([i for i in parsed_doc["images"] if i.get("full_b64") and not i.get("is_small")]), 10)
             if progress_callback:
                 progress_callback(f"Reviewing {total_images} images/diagrams with {img_model}...", 82)

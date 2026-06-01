@@ -44,12 +44,20 @@ export default function Dashboard({ user }: DashboardProps) {
     // Models are fetched live from the selected Ollama host (never hardcoded),
     // so users can only pick models that actually exist on their server.
     const [availableModels, setAvailableModels] = useState<string[]>([])
+    const [visionModels, setVisionModels] = useState<string[]>([])
     const [loadingModels, setLoadingModels] = useState(false)
     const [modelsError, setModelsError] = useState<string | null>(null)
     const [selectedModel, setSelectedModel] = useState("")
     const [visionModel, setVisionModel] = useState("")
     const [reviewMode, setReviewMode] = useState<"normal" | "pro" | "max">("pro")
     const [engineWarning, setEngineWarning] = useState<string | null>(null)
+
+    const LOCAL_OLLAMA = "http://localhost:11434"
+    const CLOUD_OLLAMA = "https://ollama.com"
+    const isLocalHost = (h: string) => /localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal/i.test(h || "")
+    const runtimeIsLocal = isLocalHost(hostUrl)
+    // Local Ollama needs no API key; cloud does.
+    const keyOk = runtimeIsLocal || !!apiKey
 
     // Review State
     const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -93,8 +101,16 @@ export default function Dashboard({ user }: DashboardProps) {
 
     // Fetch the live model list from the chosen Ollama host. Picks sensible
     // defaults for the text and vision models from what actually exists.
+    const applyModelList = (models: string[], vision: string[]) => {
+        setAvailableModels(models)
+        setVisionModels(vision)
+        setSelectedModel(prev => (prev && models.includes(prev) ? prev : models[0]))
+        const defaultVision = vision[0] || models.find(m => /vl|vision|llava/i.test(m))
+        setVisionModel(prev => (prev && models.includes(prev) ? prev : (defaultVision || models[0])))
+    }
+
     const fetchModels = async (key: string, host: string) => {
-        if (!key) return
+        if (!key && !isLocalHost(host)) return  // cloud needs a key; local doesn't
         setLoadingModels(true)
         setModelsError(null)
         try {
@@ -106,10 +122,7 @@ export default function Dashboard({ user }: DashboardProps) {
             const data = await resp.json()
             const models: string[] = Array.isArray(data.models) ? data.models : []
             if (data.success && models.length) {
-                setAvailableModels(models)
-                setSelectedModel(prev => (prev && models.includes(prev) ? prev : models[0]))
-                const vision = models.find(m => /vl|vision|llava/i.test(m))
-                setVisionModel(prev => (prev && models.includes(prev) ? prev : (vision || models[0])))
+                applyModelList(models, Array.isArray(data.vision_models) ? data.vision_models : [])
             } else {
                 setAvailableModels([])
                 setModelsError(data.error || "No models returned by this host")
@@ -134,7 +147,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 const host = data.ollama_host_url || "https://ollama.com"
                 setApiKey(key)
                 setHostUrl(host)
-                if (key) fetchModels(key, host)
+                if (key || isLocalHost(host)) fetchModels(key, host)
             }
         }
         loadSettings().catch(() => { })
@@ -166,10 +179,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 // /api/check-ollama returns the live model list — use it directly.
                 const models: string[] = Array.isArray(data.models) ? data.models : []
                 if (models.length) {
-                    setAvailableModels(models)
-                    setSelectedModel(prev => (prev && models.includes(prev) ? prev : models[0]))
-                    const vision = models.find(m => /vl|vision|llava/i.test(m))
-                    setVisionModel(prev => (prev && models.includes(prev) ? prev : (vision || models[0])))
+                    applyModelList(models, Array.isArray(data.vision_models) ? data.vision_models : [])
                     setModelsError(null)
                 } else {
                     setModelsError("Connected, but no models found on this host.")
@@ -209,7 +219,7 @@ export default function Dashboard({ user }: DashboardProps) {
     }
 
     const handleStartReview = async () => {
-        if (!selectedFile || !apiKey || !selectedModel) {
+        if (!selectedFile || !selectedModel || !keyOk) {
             setShowSettingsModal(true)
             return
         }
@@ -435,6 +445,31 @@ export default function Dashboard({ user }: DashboardProps) {
 
                         {/* Modal Body */}
                         <div className="px-6 py-5 space-y-5">
+                            {/* Runtime: Local (private, on-device) vs Cloud */}
+                            <div className="space-y-2">
+                                <Label className="text-gray-300 text-sm">Ollama Runtime</Label>
+                                <div className="flex bg-white/5 p-1 rounded-lg border border-white/10 w-fit">
+                                    <button
+                                        type="button"
+                                        onClick={() => setHostUrl(LOCAL_OLLAMA)}
+                                        className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${runtimeIsLocal ? "bg-white text-black" : "text-gray-400 hover:text-white"}`}
+                                    >
+                                        Local (private)
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setHostUrl(CLOUD_OLLAMA)}
+                                        className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${!runtimeIsLocal ? "bg-white text-black" : "text-gray-400 hover:text-white"}`}
+                                    >
+                                        Cloud
+                                    </button>
+                                </div>
+                                <p className="text-xs text-gray-500">
+                                    {runtimeIsLocal
+                                        ? "Documents never leave this machine/network. No API key required."
+                                        : "Uses ollama.com. Requires an API key. Documents are sent to the cloud."}
+                                </p>
+                            </div>
                             <div className="space-y-2">
                                 <Label className="text-gray-300 text-sm">Host URL</Label>
                                 <Input
@@ -444,11 +479,13 @@ export default function Dashboard({ user }: DashboardProps) {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label className="text-gray-300 text-sm">API Key(s)</Label>
+                                <Label className="text-gray-300 text-sm">
+                                    API Key(s) {runtimeIsLocal && <span className="text-gray-500">(optional for Local)</span>}
+                                </Label>
                                 <textarea
                                     value={apiKey}
                                     onChange={e => setApiKey(e.target.value)}
-                                    placeholder={"Paste one or more API keys, separated by commas.\nExample: key1, key2, key3"}
+                                    placeholder={runtimeIsLocal ? "Not required for a local Ollama." : "Paste one or more API keys, separated by commas.\nExample: key1, key2, key3"}
                                     className="flex w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-sm h-20 focus:outline-none focus:ring-2 focus:ring-white/20 resize-none text-white placeholder:text-gray-600"
                                 />
                                 <p className="text-xs text-gray-500">Multiple keys enable automatic failover if one key's quota is exceeded.</p>
@@ -487,10 +524,15 @@ export default function Dashboard({ user }: DashboardProps) {
                                             className="flex h-11 w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
                                         >
                                             {availableModels.map(m => (
-                                                <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">{m}</option>
+                                                <option key={m} value={m} className="bg-[#0a0a0a] text-gray-200 py-1">
+                                                    {visionModels.includes(m) ? `${m} (vision)` : m}
+                                                </option>
                                             ))}
                                         </select>
-                                        <p className="text-xs text-gray-500">Used for reviewing images, diagrams, and flowcharts.</p>
+                                        <p className="text-xs text-gray-500">
+                                            Used for reviewing images, diagrams, and flowcharts.
+                                            {visionModels.length === 0 && " No vision-capable model detected on this host — image review will be skipped."}
+                                        </p>
                                     </div>
                                 </>
                             )}
@@ -522,7 +564,7 @@ export default function Dashboard({ user }: DashboardProps) {
                             <Button variant="ghost" onClick={() => setShowSettingsModal(false)} className="text-gray-400 hover:text-white hover:bg-white/5">
                                 Cancel
                             </Button>
-                            <Button onClick={handleSaveSettings} disabled={savingSettings || !apiKey} className="bg-white text-black hover:bg-gray-200 px-6">
+                            <Button onClick={handleSaveSettings} disabled={savingSettings || !keyOk} className="bg-white text-black hover:bg-gray-200 px-6">
                                 {savingSettings ? "Testing..." : "Test & Save"}
                             </Button>
                         </div>

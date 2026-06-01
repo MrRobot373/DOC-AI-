@@ -126,15 +126,21 @@ def index():
     return render_template("index.html")
 
 
+def _is_local_host(host):
+    """A local Ollama (localhost/127.0.0.1/host.docker.internal) needs no API key."""
+    h = (host or "").lower()
+    return any(token in h for token in ("localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal"))
+
+
 @app.route("/api/check-ollama", methods=["POST"])
 def check_ollama():
-    """Test connection to Ollama Cloud API."""
+    """Test connection to an Ollama host (local or cloud)."""
     data = request.get_json()
     api_key = data.get("api_key", "")
     host = data.get("host", "https://ollama.com")
 
-    if not api_key:
-        return jsonify({"success": False, "error": "API key is required"})
+    if not api_key and not _is_local_host(host):
+        return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
 
     result = test_connection(api_key, host)
     return jsonify(result)
@@ -142,13 +148,13 @@ def check_ollama():
 
 @app.route("/api/models", methods=["POST"])
 def list_models():
-    """List available models from Ollama Cloud."""
+    """List available models from an Ollama host (local or cloud)."""
     data = request.get_json()
     api_key = data.get("api_key", "")
     host = data.get("host", "https://ollama.com")
 
-    if not api_key:
-        return jsonify({"success": False, "error": "API key is required"})
+    if not api_key and not _is_local_host(host):
+        return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
 
     result = test_connection(api_key, host)
     return jsonify(result)
@@ -436,8 +442,8 @@ def start_review():
     review_mode = request.form.get("review_mode", "pro")
     file_type = request.form.get("file_type", "doc")
 
-    if not api_key:
-        return jsonify({"success": False, "error": "API key is required"})
+    if not api_key and not _is_local_host(host):
+        return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
     if not model:
         return jsonify({"success": False, "error": "Model selection is required"})
     if review_mode not in {"normal", "pro", "max"}:
