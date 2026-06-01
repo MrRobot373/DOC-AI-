@@ -1021,6 +1021,11 @@ export default function Dashboard({ user }: DashboardProps) {
                                     <a href={reportUrl} download>Download Report (.xlsx)</a>
                                 </Button>
                             )}
+                            {reviewId && findings.length > 0 && (
+                                <Button asChild variant="outline" className="border-white/15 bg-transparent text-white hover:bg-white/5 h-11">
+                                    <a href={`${API_BASE_URL}/api/export-pdf/${reviewId}`} download>Download PDF</a>
+                                </Button>
+                            )}
                         </div>
                     </CardContent>
                 </Card>

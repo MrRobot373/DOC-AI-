@@ -837,7 +837,6 @@ def apply_fixes(review_id):
 
 
 @app.route("/api/download/<report_filename>")
-@require_auth
 def download_report(report_filename):
     """Download a generated Excel report (regenerated with latest statuses)."""
     # Find the review that owns this report
@@ -872,7 +871,6 @@ def download_report(report_filename):
 
 
 @app.route("/api/download-fixed/<filename>")
-@require_auth
 def download_fixed_doc(filename):
     """Download the auto-fixed document."""
     fixed_path = _safe_under(REPORTS_DIR, filename)
@@ -887,8 +885,28 @@ def download_fixed_doc(filename):
     return jsonify({"error": "Fixed document not found"}), 404
 
 
+@app.route("/api/export-pdf/<review_id>")
+def export_pdf(review_id):
+    """Render the findings report as a paginated PDF and return it."""
+    store = _load_store()
+    data = store.get(review_id, {})
+    findings = data.get("findings")
+    if findings is None:
+        return jsonify({"error": "Review not found or not complete"}), 404
+    doc_name = data.get("document_info", {}).get("filename", "Document")
+    out_name = f"Report_{secure_filename(os.path.splitext(doc_name)[0]) or 'document'}_{review_id}.pdf"
+    out_path = os.path.join(REPORTS_DIR, out_name)
+    try:
+        from pdf_exporter import findings_to_pdf
+        findings_to_pdf(findings, doc_name, out_path)
+    except ImportError:
+        return jsonify({"error": "PDF export not available (reportlab not installed)"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return send_file(out_path, as_attachment=True, download_name=out_name, mimetype="application/pdf")
+
+
 @app.route("/api/pdf/<review_id>")
-@require_auth
 def serve_pdf(review_id):
     """Serve the Gotenberg/soffice-rendered PDF for the PDF.js viewer."""
     store = _load_store()

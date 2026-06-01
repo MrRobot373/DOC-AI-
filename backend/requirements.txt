@@ -11,3 +11,5 @@ gunicorn>=21
 supabase>=2.0
 pandas>=2.0
 python-dotenv>=1.0
+reportlab>=4.0
+PyJWT>=2.8
