@@ -32,11 +32,12 @@ from review_engine import (
     create_failover_client,
     test_connection,
     review_document,
+    review_cross_document,
     diff_findings,
     REVIEW_CATEGORIES,
     SEVERITY_LEVELS,
 )
-from report_generator import generate_excel_report
+from report_generator import generate_excel_report, generate_batch_report
 
 app = Flask(__name__)
 # Restrict CORS via env in production (comma-separated origins); defaults to open
@@ -1053,6 +1054,168 @@ def admin_pool_keys():
             return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
+# BATCH / SUITE REVIEW (F1)
+# ============================================================
+def _run_batch_in_background(batch_id, files, api_key, host, model, review_mode,
+                             vision_model, user_id, standards, glossary):
+    """Review a suite of documents together + a cross-document pass."""
+    store = _load_store()
+    store[batch_id] = {"status": "parsing", "message": "Starting suite review...", "progress": 5}
+    _save_store(store)
+    try:
+        # Resolve pool key if the user is on Auto mode
+        if user_id and _user_uses_pool(user_id):
+            pool = _get_pool_key()
+            if pool:
+                api_key, host = pool.get("api_key", ""), pool.get("host_url", host)
+                model = pool.get("model_hint") or model
+                vision_model = pool.get("vision_model_hint") or vision_model
+
+        api_keys = [k.strip() for k in (api_key or "").split(",") if k.strip()]
+        client = create_failover_client(api_keys, host) if len(api_keys) > 1 else create_ollama_client(api_keys[0] if api_keys else "", host)
+
+        per_doc = []
+        parsed_list = []
+        all_findings = []
+        total = len(files)
+        for i, (fpath, fname) in enumerate(files):
+            pct = 5 + int((i / max(total, 1)) * 75)
+            s = _load_store(); s[batch_id].update({"progress": pct, "message": f"Reviewing {fname} ({i+1}/{total})..."}); _save_store(s)
+            is_excel = fname.lower().endswith((".xlsx", ".xls"))
+            parsed = parse_excel(fpath) if is_excel else parse_document(fpath)
+            if not is_excel:
+                try:
+                    enrich_pages(parsed, fpath, pdf_save_dir=REPORTS_DIR)
+                except Exception:
+                    pass
+            findings = review_document(client, model, parsed, review_mode=review_mode,
+                                       vision_model=vision_model, standards=standards, glossary=glossary)
+            for f in findings:
+                f["document"] = fname
+            per_doc.append({"name": fname, "findings": findings})
+            parsed_list.append(parsed)
+            all_findings.extend(findings)
+
+        # Cross-document pass (the suite-level value)
+        s = _load_store(); s[batch_id].update({"progress": 85, "message": "Cross-document consistency check..."}); _save_store(s)
+        cross = []
+        try:
+            cross = review_cross_document(client, model, parsed_list, format_glossary_safe(glossary))
+            for f in cross:
+                f["document"] = "Cross-document"
+            all_findings.extend(cross)
+        except Exception as e:
+            print(f"Cross-document pass failed: {e}")
+
+        # Combined report
+        report_name = f"Suite_Report_{batch_id}_{datetime.now():%Y%m%d_%H%M}.xlsx"
+        report_path = os.path.join(REPORTS_DIR, report_name)
+        generate_batch_report(per_doc, cross, report_path)
+
+        sev_counts = {}
+        for f in all_findings:
+            sev_counts[f["severity"]] = sev_counts.get(f["severity"], 0) + 1
+
+        done = {
+            "status": "done", "progress": 100, "message": "Suite review complete!",
+            "report_filename": report_name, "review_mode": review_mode,
+            "findings": all_findings,
+            "document_info": {"filename": f"{total} documents", "words": 0, "sections": 0, "tables": 0, "images": 0},
+            "summary": {"total_findings": len(all_findings), "severity_counts": sev_counts,
+                        "category_counts": {}},
+            "categories": _categories_for_mode(review_mode),
+            "severity_levels": {k: {"label": v["label"], "color": v["color"]} for k, v in SEVERITY_LEVELS.items()},
+            "documents": [{"name": d["name"], "count": len(d["findings"])} for d in per_doc],
+            "cross_count": len(cross),
+        }
+        s = _load_store(); s[batch_id].update(done); _save_store(s)
+        _log_audit(user_id, None, "batch_done", batch_id, {"docs": total, "findings": len(all_findings)})
+    except Exception as e:
+        s = _load_store()
+        if batch_id in s:
+            s[batch_id].update({"status": "error", "message": str(e), "progress": 0})
+            _save_store(s)
+
+
+def format_glossary_safe(glossary):
+    """Render a glossary dict to prompt text (empty string when None)."""
+    try:
+        from review_engine import format_glossary
+        return format_glossary(glossary) if glossary else ""
+    except Exception:
+        return ""
+
+
+@app.route("/api/review-batch", methods=["POST"])
+@_rate_limit(os.environ.get("REVIEW_RATE_LIMIT", "30 per hour"))
+@require_auth
+def start_batch_review():
+    """Review a suite of documents (multiple files or a .zip) as one batch."""
+    api_key = request.form.get("api_key", "")
+    host = request.form.get("host", "https://ollama.com")
+    model = request.form.get("model", "")
+    vision_model = request.form.get("vision_model", "") or None
+    review_mode = request.form.get("review_mode", "pro")
+    standards = [s.strip() for s in request.form.get("standards", "").split(",") if s.strip()]
+    glossary = None
+    if request.form.get("glossary"):
+        try:
+            glossary = json.loads(request.form["glossary"])
+        except Exception:
+            glossary = None
+
+    if not api_key and _requires_api_key(host):
+        return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
+
+    user_id = _get_user_id_from_token()
+    batch_id = str(uuid.uuid4())[:8]
+    saved = []  # (filepath, original_name)
+
+    uploaded = request.files.getlist("documents")
+    archive = request.files.get("archive")
+
+    def _accept(name):
+        return name.lower().endswith((".docx", ".doc", ".xlsx", ".xls"))
+
+    if archive and archive.filename:
+        import zipfile, io as _io
+        try:
+            with zipfile.ZipFile(_io.BytesIO(archive.read())) as zf:
+                for member in zf.namelist():
+                    base = os.path.basename(member)
+                    if not base or not _accept(base):
+                        continue
+                    safe = secure_filename(base) or "document"
+                    out = os.path.join(UPLOAD_DIR, f"{batch_id}_{safe}")
+                    with open(out, "wb") as fh:
+                        fh.write(zf.read(member))
+                    saved.append((out, base))
+        except Exception as e:
+            return jsonify({"success": False, "error": f"Could not read zip: {e}"})
+    for f in uploaded:
+        if f and f.filename and _accept(f.filename):
+            safe = secure_filename(f.filename) or "document"
+            out = os.path.join(UPLOAD_DIR, f"{batch_id}_{safe}")
+            f.save(out)
+            saved.append((out, f.filename))
+
+    if len(saved) < 1:
+        return jsonify({"success": False, "error": "Upload at least one .docx/.xlsx (or a .zip of them)"})
+
+    store = _load_store()
+    store[batch_id] = {"status": "starting", "message": f"Queued {len(saved)} documents...", "progress": 3}
+    _save_store(store)
+
+    job = (batch_id, saved, api_key, host, model, review_mode, vision_model, user_id, standards, glossary)
+    if _rq_queue is not None:
+        _rq_queue.enqueue(_run_batch_in_background, *job, job_timeout=3600)
+    else:
+        threading.Thread(target=_run_batch_in_background, args=job, daemon=True).start()
+    _log_audit(user_id, None, "batch_start", batch_id, {"docs": len(saved)})
+    return jsonify({"success": True, "review_id": batch_id, "batch": True, "doc_count": len(saved)})
 
 
 if __name__ == "__main__":

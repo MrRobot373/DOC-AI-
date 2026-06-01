@@ -109,6 +109,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
     // Review State
     const [selectedFile, setSelectedFile] = useState<File | null>(null)
+    const [batchFiles, setBatchFiles] = useState<File[]>([])  // suite review (>1 file)
     const [reviewing, setReviewing] = useState(false)
     const [progressMsg, setProgressMsg] = useState("")
     const [progressPct, setProgressPct] = useState(0)
@@ -126,7 +127,7 @@ export default function Dashboard({ user }: DashboardProps) {
     // Side-by-side viewer state (click a finding -> highlight it in the doc)
     const [viewerHighlight, setViewerHighlight] = useState<string | null>(null)
     const [highlightNonce, setHighlightNonce] = useState(0)
-    const showDocViewer = fileType === "doc" && !!selectedFile && findings.length > 0
+    const showDocViewer = fileType === "doc" && !!selectedFile && findings.length > 0 && batchFiles.length <= 1
 
     const [viewerTargetPage, setViewerTargetPage] = useState<number | undefined>(undefined)
     const [viewerAuthToken, setViewerAuthToken] = useState<string | undefined>(undefined)
@@ -306,23 +307,21 @@ export default function Dashboard({ user }: DashboardProps) {
     }
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0]
-        if (!file) return
+        const files = Array.from(e.target.files || [])
+        if (files.length === 0) return
 
-        const ext = file.name.split('.').pop()?.toLowerCase()
-        if (fileType === 'excel') {
-            if (ext !== 'xlsx' && ext !== 'xls') {
-                alert("Please upload an Excel file (.xlsx or .xls)")
-                return
-            }
-        } else {
-            if (ext !== 'docx' && ext !== 'doc') {
-                alert("Please upload a Word document (.docx or .doc)")
-                return
-            }
+        const okExt = (f: File) => {
+            const ext = f.name.split('.').pop()?.toLowerCase()
+            return fileType === 'excel' ? (ext === 'xlsx' || ext === 'xls') : (ext === 'docx' || ext === 'doc')
+        }
+        const valid = files.filter(okExt)
+        if (valid.length === 0) {
+            alert(fileType === 'excel' ? "Please upload .xlsx/.xls files" : "Please upload .docx/.doc files")
+            return
         }
 
-        setSelectedFile(file)
+        setBatchFiles(valid.length > 1 ? valid : [])
+        setSelectedFile(valid[0])
         setFindings([])
         setProgressPct(0)
         setProgressMsg("")
@@ -343,6 +342,7 @@ export default function Dashboard({ user }: DashboardProps) {
         setFindings([])
         setEngineWarning(null)
 
+        const isBatch = batchFiles.length > 1
         const formData = new FormData()
         if (user) formData.append('user_id', user.id)
         formData.append('api_key', apiKey)
@@ -352,12 +352,16 @@ export default function Dashboard({ user }: DashboardProps) {
         if (glossaryText.trim()) formData.append('glossary', JSON.stringify(parseGlossary(glossaryText)))
         formData.append('vision_model', visionModel)
         formData.append('review_mode', reviewMode)
-        formData.append('document', selectedFile)
-        formData.append('file_type', fileType)
+        if (isBatch) {
+            batchFiles.forEach(f => formData.append('documents', f))
+        } else {
+            formData.append('document', selectedFile)
+            formData.append('file_type', fileType)
+        }
 
         try {
             const ah = await authHeaders()
-            const resp = await fetch(`${API_BASE_URL}/api/review`, {
+            const resp = await fetch(`${API_BASE_URL}/api/${isBatch ? 'review-batch' : 'review'}`, {
                 method: 'POST',
                 headers: { ...ah },
                 body: formData,
@@ -394,7 +398,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
                         supabase.from('review_history').insert({
                             user_id: user.id,
-                            document_name: selectedFile.name,
+                            document_name: batchFiles.length > 1 ? `Suite (${batchFiles.length} docs)` : selectedFile.name,
                             report_filename: sData.report_filename,
                             review_id: reviewId,
                         }).then()
@@ -946,13 +950,14 @@ export default function Dashboard({ user }: DashboardProps) {
                                 <div className="h-16 w-16 rounded-2xl bg-white/5 flex items-center justify-center mb-5 group-hover:bg-white/10 transition-colors">
                                     <UploadCloud className="h-7 w-7 text-gray-500 group-hover:text-gray-300 transition-colors" />
                                 </div>
-                                <h3 className="text-lg font-medium text-gray-200 mb-1">Click to upload document</h3>
-                                <p className="text-sm text-gray-500">Supports {fileType === 'excel' ? '.xlsx, .xls' : '.docx, .doc'}</p>
+                                <h3 className="text-lg font-medium text-gray-200 mb-1">Click to upload document(s)</h3>
+                                <p className="text-sm text-gray-500">Supports {fileType === 'excel' ? '.xlsx, .xls' : '.docx, .doc'} — select multiple for a suite review</p>
                                 <input
                                     type="file"
                                     ref={fileInputRef}
                                     onChange={handleFileChange}
                                     accept={fileType === 'excel' ? ".xlsx,.xls" : ".docx,.doc"}
+                                    multiple
                                     className="hidden"
                                 />
                             </div>
@@ -963,11 +968,17 @@ export default function Dashboard({ user }: DashboardProps) {
                                         <FileText className="h-5 w-5" />
                                     </div>
                                     <div>
-                                        <h4 className="font-medium text-sm text-gray-200">{selectedFile.name}</h4>
-                                        <p className="text-xs text-gray-500 mt-0.5">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                                        <h4 className="font-medium text-sm text-gray-200">
+                                            {batchFiles.length > 1 ? `Suite review — ${batchFiles.length} documents` : selectedFile.name}
+                                        </h4>
+                                        <p className="text-xs text-gray-500 mt-0.5">
+                                            {batchFiles.length > 1
+                                                ? batchFiles.map(f => f.name).join(", ").slice(0, 80)
+                                                : `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`}
+                                        </p>
                                     </div>
                                 </div>
-                                <Button variant="ghost" size="sm" onClick={() => { setSelectedFile(null); setFindings([]); setReportUrl(null); setProgressPct(0); setProgressMsg("") }} disabled={reviewing} className="text-gray-400 hover:text-white">
+                                <Button variant="ghost" size="sm" onClick={() => { setSelectedFile(null); setBatchFiles([]); setFindings([]); setReportUrl(null); setProgressPct(0); setProgressMsg("") }} disabled={reviewing} className="text-gray-400 hover:text-white">
                                     Remove
                                 </Button>
                             </div>

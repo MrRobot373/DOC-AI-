@@ -165,3 +165,25 @@ DROP POLICY IF EXISTS "Own or admin reads audit" ON public.audit_log;
 CREATE POLICY "Own or admin reads audit" ON public.audit_log FOR SELECT
   USING (auth.uid() = user_id
     OR (SELECT COUNT(*) FROM public.admin_users a WHERE a.user_id = auth.uid()) > 0);
+
+
+-- ── 9. Batches (suite review: SDD + SCTM + test report together) ─
+CREATE TABLE IF NOT EXISTS public.batches (
+  id              TEXT PRIMARY KEY,
+  user_id         UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  name            TEXT,
+  status          TEXT DEFAULT 'starting',
+  progress        INT DEFAULT 0,
+  message         TEXT,
+  doc_count       INT DEFAULT 0,
+  documents       JSONB,            -- [{name, findings_count, severity_counts}]
+  cross_findings  JSONB,            -- cross-document findings
+  combined_report_filename TEXT,
+  error           TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at      TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+ALTER TABLE public.batches ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own batches" ON public.batches;
+CREATE POLICY "Users manage own batches" ON public.batches FOR ALL
+  USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);

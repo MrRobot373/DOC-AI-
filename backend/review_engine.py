@@ -1351,6 +1351,49 @@ Return ONLY the JSON array. If no issues, return [].
     return _chat_findings(client, model, prompt, "llm_consistency")
 
 
+def review_cross_document(client, model, parsed_docs, glossary_text=""):
+    """
+    Cross-document review for a SUITE (e.g. SDD + SCTM + test report).
+
+    parsed_docs: list of parsed-document dicts (each from parse_document/parse_excel).
+    Finds issues that are invisible when reviewing one file at a time:
+      - the same signal/pin/part/rail named differently across documents
+      - values that disagree between documents
+      - requirements in one document not covered/traced in another
+    """
+    if not parsed_docs or len(parsed_docs) < 2:
+        return []
+
+    from doc_parser import get_document_summary
+    blocks = []
+    for d in parsed_docs:
+        name = d.get("filename", "document")
+        summ = get_document_summary(d)
+        # Keep each doc's contribution bounded so the suite fits one prompt.
+        blocks.append(f"===== DOCUMENT: {name} =====\n{summ[:9000]}")
+    suite_text = "\n\n".join(blocks)[:60000]
+
+    glossary_block = f"\n{glossary_text}\n" if glossary_text else ""
+    prompt = f"""You are reviewing a SUITE of related engineering documents together (e.g. design doc, SCTM, test report). Find issues that only appear ACROSS documents.
+{glossary_block}
+Find ONLY cross-document issues:
+- The same signal / pin / net / part number / power rail named differently in different documents (e.g. 'HVDCDC' in one, 'HV DCDC' in another)
+- A value or rating that disagrees between documents (e.g. SDD says 3.3 V, test report says 5 V for the same net)
+- A requirement stated in one document but not covered/traced in the SCTM or test report
+- A component listed in one document but missing from another where it should appear
+
+Do NOT report issues internal to a single document — only cross-document mismatches.
+
+## Documents in the suite:
+{suite_text}
+
+Return ONLY a JSON array. Each finding MUST name BOTH documents involved in `section` and quote the conflicting text in `evidence`.
+[{{"category":"TERMINOLOGY_CONSISTENCY|CROSS_REFERENCE_ACCURACY|TRACEABILITY|LOGICAL_CONSISTENCY","severity":"CRITICAL|MAJOR|MINOR","page":"-","section":"DocA vs DocB","comment":"the cross-document mismatch","fix":"how to reconcile","fix_type":"MANUAL","evidence":"conflicting text"}}]
+If none, return [].
+"""
+    return _chat_findings(client, model, prompt, "llm_cross_document", num_predict=4096)
+
+
 # ============================================================
 # CATEGORY-SPECIALIZED PASSES (B2) — focused prompts, higher recall per domain
 # ============================================================
