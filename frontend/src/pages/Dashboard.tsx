@@ -56,8 +56,32 @@ export default function Dashboard({ user }: DashboardProps) {
     const CLOUD_OLLAMA = "https://ollama.com"
     const isLocalHost = (h: string) => /localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal/i.test(h || "")
     const runtimeIsLocal = isLocalHost(hostUrl)
-    // Local Ollama needs no API key; cloud does.
     const keyOk = runtimeIsLocal || !!apiKey
+
+    // Known Ollama Cloud models — pre-populated so the dropdowns work immediately
+    // without needing a Test & Save round-trip. Best for technical doc analysis:
+    //   qwen3.5:397b-cloud   → best overall (vision + thinking + tools, 256K ctx)
+    //   minimax-m3:cloud     → best for long docs (1M context window)
+    //   deepseek-v3.2:cloud  → best pure reasoning
+    //   nemotron-3-super:cloud → fastest (120B MoE, only 12B active)
+    const CLOUD_PRESET_MODELS = [
+        "qwen3.5:397b-cloud",
+        "minimax-m3:cloud",
+        "deepseek-v3.2:cloud",
+        "nemotron-3-super:cloud",
+        "qwen3.5:cloud",
+        "gemma4:cloud",
+        "glm-5:cloud",
+        "glm-5.1:cloud",
+        "kimi-k2.6:cloud",
+        "minimax-m2.7:cloud",
+    ]
+    const CLOUD_PRESET_VISION = [
+        "qwen3.5:397b-cloud",
+        "minimax-m3:cloud",
+        "gemma4:cloud",
+        "qwen3.5:cloud",
+    ]
 
     // Review State
     const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -121,8 +145,19 @@ export default function Dashboard({ user }: DashboardProps) {
         setVisionModel(prev => (prev && models.includes(prev) ? prev : (defaultVision || models[0])))
     }
 
+    // When runtime switches to Cloud and no models loaded yet, use the preset list.
+    useEffect(() => {
+        if (!runtimeIsLocal && availableModels.length === 0) {
+            setAvailableModels(CLOUD_PRESET_MODELS)
+            setVisionModels(CLOUD_PRESET_VISION)
+            setSelectedModel(prev => prev || CLOUD_PRESET_MODELS[0])
+            setVisionModel(prev => prev || CLOUD_PRESET_VISION[0])
+        }
+    }, [runtimeIsLocal])
+
     const fetchModels = async (key: string, host: string) => {
-        if (!key && !isLocalHost(host)) return  // cloud needs a key; local doesn't
+        // For cloud with no key yet, preset list is already shown — don't try to fetch.
+        if (!key && !isLocalHost(host)) return
         setLoadingModels(true)
         setModelsError(null)
         try {
@@ -532,7 +567,11 @@ export default function Dashboard({ user }: DashboardProps) {
                                 </div>
                             )}
                             {availableModels.length === 0 && !loadingModels && (
-                                <p className="text-xs text-gray-500">Click “Test &amp; Save” to load the models available on this host.</p>
+                                <p className="text-xs text-gray-500">
+                                    {runtimeIsLocal
+                                        ? 'Click "Test & Save" to load models from your local Ollama.'
+                                        : 'Add your API key and click "Test & Save" to load your available cloud models.'}
+                                </p>
                             )}
                             {availableModels.length > 0 && (
                                 <>
