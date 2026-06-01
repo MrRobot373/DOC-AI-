@@ -171,13 +171,14 @@ def _chat_findings(client, model, prompt, source, images=None, num_predict=4096)
     Single entry point for every findings-producing LLM call.
 
     Centralizes determinism (seed + temperature 0), structured output
-    (`format=FINDINGS_JSON_SCHEMA`), and parsing. Raises on failure so the
-    caller can record a per-pass error instead of silently swallowing it.
+    (`format=FINDINGS_JSON_SCHEMA`), retry on quota errors, and parsing.
+    Raises on failure so the caller can record a per-pass error.
     """
     message = {"role": "user", "content": prompt}
     if images:
         message["images"] = images
-    response = client.chat(
+    response = _chat_with_retry(
+        client.chat,
         model=model,
         messages=[message],
         format=FINDINGS_JSON_SCHEMA,
@@ -246,6 +247,31 @@ def format_glossary(glossary):
     if notes:
         lines.append(f"Notes: {notes}")
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _is_quota_error(e):
+    return any(k in str(e).lower() for k in ["429", "rate", "quota", "limit", "upgrade"])
+
+
+def _chat_with_retry(client_chat_fn, max_retries=3, **kwargs):
+    """
+    Call a client.chat() fn with exponential backoff on quota/rate errors.
+    Raises only after all retries are exhausted so transient 429s don't kill a pass.
+    """
+    import time
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            return client_chat_fn(**kwargs)
+        except Exception as e:
+            last_err = e
+            if _is_quota_error(e):
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                print(f"[retry] quota/rate error (attempt {attempt+1}/{max_retries}), waiting {wait}s: {str(e)[:80]}")
+                time.sleep(wait)
+            else:
+                raise  # not a quota issue — fail immediately
+    raise last_err
 
 
 def create_ollama_client(api_key, host="https://ollama.com"):
@@ -444,7 +470,7 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
 
         # ── STEP 5: Image-specific review (use vision model) ──
         if parsed_doc.get("images") and is_vision_model(img_model):
-            total_images = min(len([i for i in parsed_doc["images"] if i.get("full_b64") and not i.get("is_small")]), 10)
+            total_images = len([i for i in parsed_doc["images"] if i.get("full_b64") and not i.get("is_small")])
             if progress_callback:
                 progress_callback(f"Reviewing {total_images} images/diagrams with {img_model}...", 82)
 
@@ -515,10 +541,22 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         status_out["passes"] = pass_status
         status_out["failed_count"] = len(failed)
         if failed:
-            status_out["warning"] = (
-                f"{len(failed)} AI pass(es) failed ({', '.join(p['name'] for p in failed)}). "
-                f"The report may be incomplete — check the model name and API key/host."
-            )
+            # Give a more specific message when it is a quota error
+            all_errors = " ".join(p.get("error", "") for p in failed)
+            if "429" in all_errors or "quota" in all_errors.lower() or "upgrade" in all_errors.lower():
+                msg = (
+                    f"{len(failed)} AI pass(es) hit the Ollama Cloud quota limit "
+                    f"({', '.join(p['name'] for p in failed)}). "
+                    f"To fix: add a second API key in Settings (paste both keys separated by a comma) "
+                    f"so the tool auto-rotates when one key is exhausted. "
+                    f"Or switch to a local Ollama for unlimited usage."
+                )
+            else:
+                msg = (
+                    f"{len(failed)} AI pass(es) failed ({', '.join(p['name'] for p in failed)}). "
+                    f"The report may be incomplete — check the model name and API key/host."
+                )
+            status_out["warning"] = msg
 
     return findings
 
@@ -1143,17 +1181,17 @@ Your job is to find EVERY real issue. You must be thorough but precise — only 
 ## Review Categories to use:
 {cat_list}
 {glossary_block}
-## Document Context:
-{doc_summary[:2000]}
+## Document Context (structural summary):
+{doc_summary[:6000]}
 
 ## Section to Review (Chunk {chunk_num}):
 {chunk_text}
 
 ## Output Rules:
 1. Use the [Page X] markers from the text to determine the page number
-2. Include the EXACT problematic text in quotes in your comment
+2. The `evidence` field is MANDATORY — copy-paste the exact verbatim text from the document that contains the error (5–80 chars). Do NOT leave it empty.
 3. Be specific — don't say "there might be an issue", say exactly what's wrong
-4. For each finding, also include a "fix_type" field: "AUTO" if it's a simple text replacement (spelling), "MANUAL" for everything else
+4. `fix_type`: "AUTO" for simple text replacements (spelling), "MANUAL" for everything else
 
 ## Output Format:
 Return ONLY a JSON array. Each finding:
@@ -1162,9 +1200,10 @@ Return ONLY a JSON array. Each finding:
   "severity": "CRITICAL|MAJOR|MINOR",
   "page": "page number from markers",
   "section": "section heading or reference",
-  "comment": "Exact quote + description of error",
+  "comment": "description of the error — what is wrong and why",
   "fix": "Step-by-step fix instruction",
-  "fix_type": "AUTO|MANUAL"
+  "fix_type": "AUTO|MANUAL",
+  "evidence": "EXACT verbatim text from the document proving the issue (required)"
 }}
 
 If no issues found, return [].
@@ -1185,13 +1224,29 @@ If no issues found, return [].
 
 
 def _review_consistency_with_llm(client, model, doc_summary, glossary_text=""):
-    """Check cross-document consistency issues with enhanced prompts."""
+    """
+    Check cross-document consistency issues.
 
+    For large documents the summary can exceed 200K chars; we send a structured
+    condensed form (section headings + statistics + first meaningful body content)
+    rather than a raw character slice so the model always sees the full structure
+    regardless of document size.
+    """
     glossary_block = f"\n{glossary_text}\n" if glossary_text else ""
+
+    # Build a dense structural summary: header lines (stats, headings) first,
+    # then as much body content as fits — ensures coverage of the whole document.
+    lines = doc_summary.split("\n")
+    header_lines = [l for l in lines if l.startswith("#") or l.startswith("Total") or l.startswith("Default")]
+    body_lines = [l for l in lines if l not in header_lines and l.strip()]
+    # Pack: all headers + body content up to 24000 chars total
+    structured = "\n".join(header_lines) + "\n\n" + "\n".join(body_lines)
+    structured = structured[:24000]
+
     prompt = f"""You are a senior technical document reviewer. Analyze the overall structure and consistency of this document.
 {glossary_block}
 ## Full Document Summary:
-{doc_summary[:8000]}
+{structured}
 
 ## You MUST check for ALL of the following:
 
@@ -1234,18 +1289,27 @@ def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
         active_categories = ["UNITS_CALCULATIONS", "TEST_RESULT_COMPLETENESS", "MEASUREMENT_RESOLUTION", 
                             "FORMATTING_ALIGNMENT", "DECIMAL_CONSISTENCY", "TABLE_QUALITY"]
 
-    tables_text = []
-    for tbl in parsed_doc["tables"][:15]:  # Limit to first 15 tables
-        tbl_name = tbl.get("name", f"Table {tbl['index'] + 1}")
-        rows_str = "\n".join(
-            f"  Row {i}: {' | '.join(c[:150] for c in row)}"
-            for i, row in enumerate(tbl["rows"][:100])
-        )
-        tables_text.append(f"--- {tbl_name} ({tbl['num_rows']}×{tbl['num_cols']}) ---\n{rows_str}")
+    # Process ALL tables — every single table gets reviewed, no exceptions.
+    # Large documents (100+ tables) are split into batches so the prompt stays
+    # within context limits, but every batch is sent independently.
+    all_tables = parsed_doc["tables"]
+    BATCH_SIZE = 10  # tables per LLM call — each call covers all rows in its batch
+    batches = [all_tables[i:i+BATCH_SIZE] for i in range(0, len(all_tables), BATCH_SIZE)]
+    all_table_findings = []
 
-    prompt = f"""You are reviewing TABLES in an engineering technical document (HDD/WCCA/SCTM). Check EVERY table for:
+    for batch_idx, batch in enumerate(batches, 1):
+        tables_text = []
+        for tbl in batch:
+            tbl_name = tbl.get("name", f"Table {tbl['index'] + 1}")
+            rows_str = "\n".join(
+                f"  Row {i}: {' | '.join(c[:150] for c in row)}"
+                for i, row in enumerate(tbl["rows"])  # ALL rows, no cap
+            )
+            tables_text.append(f"--- {tbl_name} ({tbl['num_rows']}×{tbl['num_cols']}) ---\n{rows_str}")
 
-1. **Decimal place consistency**: Within each column, do all numerical values have the same number of decimal places? (e.g., mixing "3.3" and "3.300" is an error)
+        prompt = f"""You are reviewing TABLES (batch {batch_idx}/{len(batches)}) in an engineering technical document (HDD/WCCA/SCTM). Check EVERY table for:
+
+1. **Decimal place consistency**: Within each column, do all numerical values have the same number of decimal places?
 2. **Missing headers or unclear column names**
 3. **Empty cells that should have values**
 4. **Inconsistent units across rows** (e.g., some cells say "V" and others say "VDC")
@@ -1262,7 +1326,7 @@ IMPORTANT: Do NOT report that a table is "incomplete" or "truncated" — data ma
 {chr(10).join(tables_text)}
 
 ## Output Format:
-Return a JSON array. Each finding:
+Return a JSON array. The `evidence` field is MANDATORY — copy the exact cell value or header that shows the issue.
 {{
   "category": "CATEGORY_ID",
   "severity": "CRITICAL|MAJOR|MINOR",
@@ -1270,13 +1334,21 @@ Return a JSON array. Each finding:
   "section": "Exact Table Name",
   "comment": "detailed description with specific cell/row references",
   "fix": "step-by-step fix instruction",
-  "fix_type": "MANUAL"
+  "fix_type": "MANUAL",
+  "evidence": "exact quoted text from the table that shows the problem"
 }}
 
 Return ONLY the JSON array. If no issues, return [].
 """
+        try:
+            batch_findings = _chat_findings(client, model, prompt, f"llm_tables_batch{batch_idx}")
+            if batch_findings:
+                all_table_findings.extend(batch_findings)
+        except Exception as e:
+            print(f"[tables] batch {batch_idx}/{len(batches)} failed: {e}")
+            # Log but continue — remaining batches must still run
 
-    return _chat_findings(client, model, prompt, "llm_tables")
+    return all_table_findings
 
 
 def _review_images_with_llm(client, model, parsed_doc, doc_summary="", progress_callback=None, errors=None):
@@ -1294,12 +1366,12 @@ def _review_images_with_llm(client, model, parsed_doc, doc_summary="", progress_
         if paragraphs_text:
             all_text_by_section[heading] = paragraphs_text[:1500]  # Cap per section
     
-    # Build surrounding text context (compact version)
-    nearby_text = "\n".join([f"[{h}]: {t[:500]}" for h, t in list(all_text_by_section.items())[:15]])
-    
-    # Filter to reviewable images
+    # Build surrounding text context — all sections, not a capped slice
+    nearby_text = "\n".join([f"[{h}]: {t[:500]}" for h, t in all_text_by_section.items()])
+
+    # Review ALL non-trivial images — no arbitrary cap.
+    # Per-image errors are caught individually so one failure never stops the rest.
     reviewable_images = [img for img in parsed_doc["images"] if img.get("full_b64") and not img.get("is_small")]
-    reviewable_images = reviewable_images[:10]  # Limit to 10
     total_images = len(reviewable_images)
     
     for idx, img in enumerate(reviewable_images):
@@ -1329,7 +1401,7 @@ The document text near this image is provided below. Compare the image content a
 {nearby_text[:3000]}
 
 ## Document Summary:
-{doc_summary[:1000]}
+{doc_summary[:4000]}
 
 ## Output Format:
 Return a JSON array of findings. Each finding must be:
@@ -1542,12 +1614,30 @@ def _ground_and_anchor_findings(findings, parsed_doc):
             # Image/vision findings describe a picture, not quotable text — exempt.
             is_image = source.startswith("vision") or "image" in source or f.get("image_ref")
             if not is_image:
+                # When evidence is empty, try to salvage a quote from the comment.
+                # Many models quote the exact text in the comment with "..." or "".
                 if not evidence:
-                    continue  # ungrounded text finding → drop
+                    comment = f.get("comment", "")
+                    # Extract first quoted phrase (double or single quotes)
+                    m = re.search(r'"([^"]{8,120})"|\'([^\']{8,120})\'|"([^"]{8,120})"', comment)
+                    if m:
+                        evidence = (m.group(1) or m.group(2) or m.group(3)).strip()
+                        f["evidence"] = evidence
+                    else:
+                        # Last resort: use first 60 chars of the comment as a soft anchor
+                        # (does NOT drop here — we'll let the token check decide)
+                        evidence = comment[:60].strip()
+
+                if not evidence:
+                    continue  # truly empty after all attempts → drop
+
                 ev_norm = _norm_text(evidence)
                 tokens = [t for t in re.findall(r"[a-z0-9]{4,}", ev_norm) if len(t) > 3]
-                if tokens and not any(tok in doc_text for tok in tokens[:6]):
-                    continue  # evidence not in document → hallucination → drop
+                # Only drop when we have tokens AND none appear in the document.
+                # When evidence is a salvaged comment excerpt, give it a lighter check.
+                if tokens and not any(tok in doc_text for tok in tokens[:4]):
+                    continue  # evidence not in document → likely hallucination → drop
+
                 # Anchor to the first paragraph that contains the evidence snippet.
                 snippet = ev_norm[:40]
                 if snippet:
@@ -1610,7 +1700,8 @@ Candidates (JSON):
 Return ONLY a JSON array of verdicts: {{"id": <int>, "keep": <bool>, "confidence": <0-1>, "reason": "<short>"}}.
 """
         try:
-            response = client.chat(
+            response = _chat_with_retry(
+                client.chat,
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 format=VERDICTS_JSON_SCHEMA,

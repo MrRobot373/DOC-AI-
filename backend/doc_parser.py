@@ -867,10 +867,8 @@ def get_document_summary(parsed):
         lines.append("\n## TABLES IN DOCUMENT")
         for tbl in parsed["tables"]:
             lines.append(f"\n### Table {tbl['index'] + 1} ({tbl['num_rows']}×{tbl['num_cols']})")
-            for row_idx, row in enumerate(tbl["rows"][:20]):  # First 20 rows instead of 5
-                lines.append(f"  Row {row_idx}: {' | '.join(r[:60] for r in row)}")
-            if tbl["num_rows"] > 20:
-                lines.append(f"  ... ({tbl['num_rows'] - 20} more rows)")
+            for row_idx, row in enumerate(tbl["rows"]):  # ALL rows — no cap
+                lines.append(f"  Row {row_idx}: {' | '.join(r[:80] for r in row)}")
 
     # Images
     if parsed["images"]:
