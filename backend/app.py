@@ -56,15 +56,57 @@ def _safe_under(directory, filename):
         return None
     return candidate
 
+
+# Optional rate limiting (per user when authenticated, else per IP). No-op if
+# Flask-Limiter isn't installed. Backed by Redis when REDIS_URL is set.
+limiter = None
+try:
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+
+    def _rl_key():
+        # _get_user_id_from_token is defined later; guard with a late lookup.
+        fn = globals().get("_get_user_id_from_token")
+        uid = fn() if fn else None
+        return uid or get_remote_address()
+
+    limiter = Limiter(
+        key_func=_rl_key, app=app,
+        storage_uri=os.environ.get("REDIS_URL") or "memory://",
+        default_limits=[],
+    )
+except Exception as _e:
+    print(f"[*] Rate limiting disabled ({_e})")
+
+
+def _rate_limit(rule):
+    """Decorator that applies a limit only when the limiter is available."""
+    def deco(fn):
+        return limiter.limit(rule)(fn) if limiter else fn
+    return deco
+
 # Store active reviews and reports in memory
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-# Background execution: in-process threads (single-worker). Phase 2 replaces this
-# with a durable Redis+RQ queue + a reviews DB table for crash-safe, multi-worker
-# operation. The dead Huey/Redis scaffolding has been removed.
+# Background execution: a durable Redis+RQ queue when REDIS_URL is set (crash-safe,
+# multi-worker, survives restarts), otherwise in-process threads for local/dev.
+REDIS_URL = os.environ.get("REDIS_URL")
+_rq_queue = None
+if REDIS_URL:
+    try:
+        from redis import Redis as _Redis
+        from rq import Queue as _RQQueue
+        _rq_conn = _Redis.from_url(REDIS_URL)
+        _rq_conn.ping()
+        _rq_queue = _RQQueue("docai", connection=_rq_conn, default_timeout=1800)
+        print("[*] Queue: Redis + RQ (durable). Run the worker: python -m rq worker docai")
+    except Exception as e:
+        print(f"[*] Queue: threading fallback (Redis unavailable: {e})")
+else:
+    print("[*] Queue: threading (set REDIS_URL for a durable queue)")
 
 # Supabase Configuration
 # Use Service Role key for backend (bypasses RLS, is authoritative).
@@ -649,6 +691,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
 
 
 @app.route("/api/review", methods=["POST"])
+@_rate_limit(os.environ.get("REVIEW_RATE_LIMIT", "30 per hour"))
 @require_auth
 def start_review():
     """Upload a document and start the review process in background."""
@@ -703,13 +746,13 @@ def start_review():
     _save_store(store)
     _supabase_upsert_review(review_id, user_id, initial)
 
-    # Dispatch to a background thread so progress polling works.
-    thread = threading.Thread(
-        target=_run_review_in_background,
-        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model, user_id, standards, glossary),
-        daemon=True,
-    )
-    thread.start()
+    # Dispatch: durable queue if configured, else a background thread.
+    job_args = (review_id, filepath, file.filename, api_key, host, model,
+                review_mode, file_type, vision_model, user_id, standards, glossary)
+    if _rq_queue is not None:
+        _rq_queue.enqueue(_run_review_in_background, *job_args, job_timeout=1800)
+    else:
+        threading.Thread(target=_run_review_in_background, args=job_args, daemon=True).start()
     _log_audit(user_id, None, "review_start", review_id, {"file": file.filename, "mode": review_mode, "standards": standards})
 
     return jsonify({"success": True, "review_id": review_id})

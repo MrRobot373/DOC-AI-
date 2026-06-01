@@ -44,6 +44,10 @@ services:
       - freellmapi_data:/app/server/data
     restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
   backend:
     build:
       context: .
@@ -53,13 +57,40 @@ services:
     environment:
       GOTENBERG_URL: http://gotenberg:3000
       ALLOWED_ORIGINS: http://localhost:8080
+      REDIS_URL: redis://redis:6379
       # Optional cloud persistence/auth (leave blank for pure on-prem):
       VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
       VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
     volumes:
       - backend_uploads:/app/backend/uploads
       - backend_reports:/app/backend/reports
     depends_on:
+      - gotenberg
+      - ollama
+      - redis
+    restart: unless-stopped
+
+  # Durable review worker — consumes jobs from Redis so reviews survive restarts
+  # and scale horizontally (run more replicas for more throughput).
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["python", "backend/worker.py"]
+    environment:
+      GOTENBERG_URL: http://gotenberg:3000
+      REDIS_URL: redis://redis:6379
+      VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+      VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
+    volumes:
+      - backend_uploads:/app/backend/uploads
+      - backend_reports:/app/backend/reports
+    depends_on:
+      - redis
       - gotenberg
       - ollama
     restart: unless-stopped
