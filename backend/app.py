@@ -386,13 +386,16 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         })
         _save_store(store)
 
-        # Create Ollama client (supports failover with multiple keys)
+        # Create Ollama client (supports failover with multiple keys).
+        # api_key may be empty for a local Ollama — create_ollama_client
+        # handles the no-key case by sending no Authorization header.
         api_keys = [k.strip() for k in api_key.split(",") if k.strip()]
         if len(api_keys) > 1:
             client = create_failover_client(api_keys, host)
             print(f"[Failover] Using {len(api_keys)} API keys with automatic rotation.")
         else:
-            client = create_ollama_client(api_keys[0], host)
+            single_key = api_keys[0] if api_keys else ""
+            client = create_ollama_client(single_key, host)
 
         # Progress callback
         def progress_cb(msg, explicit_pct=None):
