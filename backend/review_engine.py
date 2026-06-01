@@ -1071,6 +1071,37 @@ def _check_orphan_references(parsed_doc):
 # ============================================================
 # LLM-POWERED REVIEW FUNCTIONS
 # ============================================================
+def _cache_key(*parts):
+    return hashlib.md5("||".join(str(p) for p in parts).encode("utf-8")).hexdigest()
+
+
+def _cache_get(key):
+    """Read cached findings for a content key. Enabled only when DOCAI_CACHE_DIR is set."""
+    cache_dir = os.environ.get("DOCAI_CACHE_DIR")
+    if not cache_dir:
+        return None
+    path = os.path.join(cache_dir, key + ".json")
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            return None
+    return None
+
+
+def _cache_put(key, findings):
+    cache_dir = os.environ.get("DOCAI_CACHE_DIR")
+    if not cache_dir:
+        return
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(os.path.join(cache_dir, key + ".json"), "w", encoding="utf-8") as fh:
+            json.dump(findings, fh)
+    except Exception:
+        pass
+
+
 def _review_chunk_multipass(client, model, chunk_text, doc_summary, chunk_num, active_categories, glossary_text=""):
     """
     Enhanced chunk review with focused, detailed prompt.
@@ -1139,9 +1170,18 @@ Return ONLY a JSON array. Each finding:
 If no issues found, return [].
 """
 
+    # Content-addressed cache: identical (model, chunk, categories, glossary) →
+    # identical findings with no LLM call. Opt-in via DOCAI_CACHE_DIR.
+    cache_key = _cache_key("chunk", model, chunk_text, ",".join(active_categories), glossary_text)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     # Deterministic, schema-constrained call. Errors propagate to the
     # orchestrator so they can be recorded as a per-pass failure (not swallowed).
-    return _chat_findings(client, model, prompt, f"llm_chunk_{chunk_num}")
+    findings = _chat_findings(client, model, prompt, f"llm_chunk_{chunk_num}")
+    _cache_put(cache_key, findings)
+    return findings
 
 
 def _review_consistency_with_llm(client, model, doc_summary, glossary_text=""):
