@@ -449,7 +449,7 @@ def _categories_for_mode(review_mode=None):
     }
 
 
-def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None, user_id=None, standards=None):
+def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None, user_id=None, standards=None, glossary=None):
     """Background worker that runs the full document review."""
     store = _load_store()
     try:
@@ -529,6 +529,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             vision_model=vision_model,
             status_out=engine_status,
             standards=standards,
+            glossary=glossary,
         )
 
         # Generate report
@@ -658,6 +659,13 @@ def start_review():
     review_mode = request.form.get("review_mode", "pro")
     file_type = request.form.get("file_type", "doc")
     standards = [s.strip() for s in request.form.get("standards", "").split(",") if s.strip()]
+    glossary = None
+    _glossary_raw = request.form.get("glossary", "")
+    if _glossary_raw:
+        try:
+            glossary = json.loads(_glossary_raw)
+        except Exception:
+            glossary = None
 
     if not api_key and _requires_api_key(host):
         return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
@@ -698,7 +706,7 @@ def start_review():
     # Dispatch to a background thread so progress polling works.
     thread = threading.Thread(
         target=_run_review_in_background,
-        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model, user_id, standards),
+        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model, user_id, standards, glossary),
         daemon=True,
     )
     thread.start()

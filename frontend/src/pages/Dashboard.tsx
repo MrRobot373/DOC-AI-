@@ -66,6 +66,19 @@ export default function Dashboard({ user }: DashboardProps) {
     // "Auto" mode draws from the admin's shared key pool — no host/key/model needed.
     const [usePool, setUsePool] = useState(false)
     const [notifyEmail, setNotifyEmail] = useState(false)
+    const [glossaryText, setGlossaryText] = useState("")  // one rule per line; "KEY: expansion" => acronym
+
+    // Parse the freeform glossary box into the structured shape the backend expects.
+    const parseGlossary = (text: string) => {
+        const acronyms: Record<string, string> = {}
+        const canonical_terms: string[] = []
+        for (const line of text.split("\n").map(l => l.trim()).filter(Boolean)) {
+            const m = line.match(/^([A-Za-z0-9_\-./]{2,20}):\s*(.+)$/)
+            if (m) acronyms[m[1]] = m[2]
+            else canonical_terms.push(line)
+        }
+        return { acronyms, canonical_terms, raw: text }
+    }
     // Key is OK if: pool mode, local host, or a key is present.
     const keyOk = usePool || runtimeIsLocal || !!apiKey
 
@@ -230,6 +243,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 if (data.vision_model) setVisionModel(data.vision_model)
                 if (data.use_pool) setUsePool(true)
                 if (data.notify_email) setNotifyEmail(true)
+                if (data.glossary_json?.raw) setGlossaryText(data.glossary_json.raw)
                 if (key || isLocalHost(host)) fetchModels(key, host)
             }
         }
@@ -258,6 +272,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 ollama_runtime: usePool ? 'auto' : (runtimeIsLocal ? 'local' : 'cloud'),
                 use_pool: usePool,
                 notify_email: notifyEmail,
+                glossary_json: glossaryText ? parseGlossary(glossaryText) : null,
                 selected_model: selectedModel,
                 vision_model: visionModel,
             })
@@ -334,6 +349,7 @@ export default function Dashboard({ user }: DashboardProps) {
         formData.append('host', hostUrl)
         formData.append('model', selectedModel || 'auto')
         formData.append('standards', selectedStandards.join(','))
+        if (glossaryText.trim()) formData.append('glossary', JSON.stringify(parseGlossary(glossaryText)))
         formData.append('vision_model', visionModel)
         formData.append('review_mode', reviewMode)
         formData.append('document', selectedFile)
@@ -677,6 +693,18 @@ export default function Dashboard({ user }: DashboardProps) {
                                     </div>
                                 </>
                             )}
+
+                            {/* Project glossary / rules */}
+                            <div className="space-y-2">
+                                <Label className="text-gray-300 text-sm">Project Glossary & Rules <span className="text-gray-500">(optional)</span></Label>
+                                <textarea
+                                    value={glossaryText}
+                                    onChange={e => setGlossaryText(e.target.value)}
+                                    placeholder={"One per line. Acronyms as 'KEY: meaning', rules as plain text.\nHVDCDC: High-Voltage DC-DC converter\nUse 'Maximum Ratings' not 'Max Ratings'"}
+                                    className="flex w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-xs h-24 focus:outline-none focus:ring-2 focus:ring-white/20 resize-none text-white placeholder:text-gray-600"
+                                />
+                                <p className="text-xs text-gray-500">Injected into the AI prompts so it uses your terminology and watches for your known issues.</p>
+                            </div>
 
                             {/* Email notification opt-in */}
                             <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">

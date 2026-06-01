@@ -379,7 +379,7 @@ def test_connection(api_key, host="https://ollama.com"):
 # ============================================================
 # MAIN REVIEW ORCHESTRATOR
 # ============================================================
-def review_document(client, model, parsed_doc, progress_callback=None, review_mode="pro", vision_model=None, status_out=None, standards=None):
+def review_document(client, model, parsed_doc, progress_callback=None, review_mode="pro", vision_model=None, status_out=None, standards=None, glossary=None):
     """
     Perform comprehensive multi-pass review of a parsed document.
     Uses 'model' for text/table review and 'vision_model' for image review.
@@ -440,7 +440,8 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         from doc_parser import get_document_summary, get_section_chunks_smart
 
         doc_summary = get_document_summary(parsed_doc)
-        glossary_text = format_glossary(load_glossary())
+        # Per-review glossary (from the user/UI) overrides the env-file glossary.
+        glossary_text = format_glossary(glossary if glossary else load_glossary())
         chunks = get_section_chunks_smart(parsed_doc, target_chars=8000)
         total_chunks = len(chunks)
 
