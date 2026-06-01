@@ -1,0 +1,12 @@
+{
+  "id": "fmea",
+  "name": "FMEA Coverage",
+  "category": "FMEA_COVERAGE",
+  "required_sections": [
+    {"id": "fmea", "label": "FMEA section/table", "patterns": ["fmea", "failure mode"]}
+  ],
+  "fmea_tables": {
+    "detect_headers": ["failure mode", "failure", "fault", "potential failure"],
+    "required_columns": ["cause", "effect", "detection", "severity", "occurrence"]
+  }
+}

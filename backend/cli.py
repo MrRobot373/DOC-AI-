@@ -64,10 +64,12 @@ def cmd_review(args) -> int:
                 print(f"  … {msg}", file=sys.stderr)
 
         status = {}
+        standards = [s.strip() for s in (args.standards or "").split(",") if s.strip()]
         findings = review_document(
             client, args.model, parsed,
             progress_callback=progress, review_mode=args.mode,
             vision_model=args.vision_model or None, status_out=status,
+            standards=standards,
         )
     except Exception as e:
         print(f"error: review failed: {e}", file=sys.stderr)
@@ -139,6 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--vision-model", default=os.environ.get("DOCAI_VISION_MODEL", ""))
     r.add_argument("--host", default=os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
     r.add_argument("--api-key", default="")
+    r.add_argument("--standards", default="", help="Comma-separated rule-packs: iso26262,iec61508,autosar,fmea")
     r.add_argument("--output", help="Write the Excel report to this path")
     r.add_argument("--json", action="store_true", help="Emit findings as JSON to stdout")
     r.add_argument("--fail-on", choices=["critical", "major", "minor"], help="Exit 1 if findings at/above this severity")

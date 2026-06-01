@@ -300,6 +300,16 @@ def _requires_api_key(host):
     return True
 
 
+@app.route("/api/standards")
+def list_standards():
+    """List the available standards rule-packs the user can check against."""
+    try:
+        from standards.checker import available_standards
+        return jsonify({"standards": available_standards()})
+    except Exception as e:
+        return jsonify({"standards": [], "error": str(e)})
+
+
 @app.route("/api/check-ollama", methods=["POST"])
 def check_ollama():
     """Test connection to an Ollama host (local or cloud)."""
@@ -438,7 +448,7 @@ def _categories_for_mode(review_mode=None):
     }
 
 
-def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None, user_id=None):
+def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None, user_id=None, standards=None):
     """Background worker that runs the full document review."""
     store = _load_store()
     try:
@@ -517,6 +527,7 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             review_mode=review_mode,
             vision_model=vision_model,
             status_out=engine_status,
+            standards=standards,
         )
 
         # Generate report
@@ -645,6 +656,7 @@ def start_review():
     vision_model = request.form.get("vision_model", "") or None
     review_mode = request.form.get("review_mode", "pro")
     file_type = request.form.get("file_type", "doc")
+    standards = [s.strip() for s in request.form.get("standards", "").split(",") if s.strip()]
 
     if not api_key and _requires_api_key(host):
         return jsonify({"success": False, "error": "API key is required for cloud Ollama"})
@@ -685,11 +697,11 @@ def start_review():
     # Dispatch to a background thread so progress polling works.
     thread = threading.Thread(
         target=_run_review_in_background,
-        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model, user_id),
+        args=(review_id, filepath, file.filename, api_key, host, model, review_mode, file_type, vision_model, user_id, standards),
         daemon=True,
     )
     thread.start()
-    _log_audit(user_id, None, "review_start", review_id, {"file": file.filename, "mode": review_mode})
+    _log_audit(user_id, None, "review_start", review_id, {"file": file.filename, "mode": review_mode, "standards": standards})
 
     return jsonify({"success": True, "review_id": review_id})
 

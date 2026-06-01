@@ -106,6 +106,17 @@ REVIEW_CATEGORIES = {
         "icon": "📚",
         "description": "Table of contents mismatches, broken section numbering, and heading hierarchy problems",
     },
+    # --- Standards compliance categories (F3) ---
+    "ISO26262_COMPLIANCE": {"name": "ISO 26262 Compliance", "icon": "🛡️",
+        "description": "Required ISO 26262 functional-safety elements (safety goals, ASIL, HARA, FMEA)"},
+    "IEC61508_COMPLIANCE": {"name": "IEC 61508 Compliance", "icon": "⚙️",
+        "description": "Required IEC 61508 elements (SIL, safety function, PFD/PFH, proof test, SFF, HFT)"},
+    "AUTOSAR_NAMING": {"name": "AUTOSAR Naming", "icon": "🔤",
+        "description": "AUTOSAR component/port/interface naming-convention violations"},
+    "FMEA_COVERAGE": {"name": "FMEA Coverage", "icon": "🧯",
+        "description": "FMEA table completeness — cause/effect/detection/mitigation columns present and populated"},
+    "TRACEABILITY": {"name": "Traceability", "icon": "🔗",
+        "description": "Requirement → design → test traceability gaps"},
 }
 
 SEVERITY_LEVELS = {
@@ -368,7 +379,7 @@ def test_connection(api_key, host="https://ollama.com"):
 # ============================================================
 # MAIN REVIEW ORCHESTRATOR
 # ============================================================
-def review_document(client, model, parsed_doc, progress_callback=None, review_mode="pro", vision_model=None, status_out=None):
+def review_document(client, model, parsed_doc, progress_callback=None, review_mode="pro", vision_model=None, status_out=None, standards=None):
     """
     Perform comprehensive multi-pass review of a parsed document.
     Uses 'model' for text/table review and 'vision_model' for image review.
@@ -408,6 +419,20 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         local_findings = _run_local_checks(parsed_doc)
         if local_findings:
             findings.extend(local_findings)
+
+        # ── STEP 1b: Standards compliance checks (deterministic, opt-in) ──
+        if standards:
+            try:
+                from standards.checker import run_standards_checks
+                std_findings, std_checklist = run_standards_checks(parsed_doc, standards)
+                if std_findings:
+                    findings.extend(std_findings)
+                if status_out is not None:
+                    status_out["compliance_checklist"] = std_checklist
+                _record("standards", True, count=len(std_findings))
+            except Exception as e:
+                _record("standards", False, error=str(e))
+
         if progress_callback:
             progress_callback(f"Found {len(local_findings)} issues from automated checks. Starting AI analysis...", 12)
 

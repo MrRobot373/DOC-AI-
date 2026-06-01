@@ -52,6 +52,8 @@ export default function Dashboard({ user }: DashboardProps) {
     const [visionModel, setVisionModel] = useState("")
     const [reviewMode, setReviewMode] = useState<"normal" | "pro" | "max">("pro")
     const [engineWarning, setEngineWarning] = useState<string | null>(null)
+    const [availableStandards, setAvailableStandards] = useState<{ id: string; name: string }[]>([])
+    const [selectedStandards, setSelectedStandards] = useState<string[]>([])
 
     const LOCAL_OLLAMA = "http://localhost:11434"
     const CLOUD_OLLAMA = "https://ollama.com"
@@ -117,6 +119,16 @@ export default function Dashboard({ user }: DashboardProps) {
     // Admin panel
     const [isAdmin, setIsAdmin] = useState(false)
     const [showAdminPanel, setShowAdminPanel] = useState(false)
+
+    // Load the available standards rule-packs once.
+    useEffect(() => {
+        fetch(`${API_BASE_URL}/api/standards`).then(r => r.json())
+            .then(d => setAvailableStandards(d.standards || [])).catch(() => {})
+    }, [])
+
+    const toggleStandard = (id: string) => {
+        setSelectedStandards(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id])
+    }
 
     // Grab the current session token once for the viewer + check admin status.
     useEffect(() => {
@@ -318,6 +330,7 @@ export default function Dashboard({ user }: DashboardProps) {
         formData.append('api_key', apiKey)
         formData.append('host', hostUrl)
         formData.append('model', selectedModel || 'auto')
+        formData.append('standards', selectedStandards.join(','))
         formData.append('vision_model', visionModel)
         formData.append('review_mode', reviewMode)
         formData.append('document', selectedFile)
@@ -928,6 +941,30 @@ export default function Dashboard({ user }: DashboardProps) {
                                         className="h-full bg-white rounded-full transition-all duration-500 ease-out"
                                         style={{ width: `${progressPct}%` }}
                                     ></div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Standards compliance multi-select */}
+                        {fileType === 'doc' && availableStandards.length > 0 && (
+                            <div className="pt-2">
+                                <p className="text-xs text-gray-500 mb-2">Check against standards (optional):</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {availableStandards.map(s => (
+                                        <button
+                                            key={s.id}
+                                            type="button"
+                                            onClick={() => toggleStandard(s.id)}
+                                            title={s.name}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                                                selectedStandards.includes(s.id)
+                                                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                                    : 'bg-white/[0.02] text-gray-400 border-white/10 hover:text-gray-200'
+                                            }`}
+                                        >
+                                            {s.id.toUpperCase()}
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
                         )}

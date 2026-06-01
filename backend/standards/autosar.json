@@ -1,0 +1,23 @@
+{
+  "id": "autosar",
+  "name": "AUTOSAR Naming Conventions",
+  "category": "AUTOSAR_NAMING",
+  "required_sections": [],
+  "naming": [
+    {
+      "id": "swc",
+      "label": "Software Component names should be UpperCamelCase",
+      "find": "(?i)\\b([a-z][a-zA-Z0-9_]*)\\s+(?:software component|swc)\\b",
+      "must_match": "^[A-Z][A-Za-z0-9]*$",
+      "hint": "Use UpperCamelCase for SWC names (e.g. 'BatteryMonitorSwc')."
+    },
+    {
+      "id": "port",
+      "label": "Port names should be UpperCamelCase",
+      "find": "(?i)\\bport\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "must_match": "^[A-Z][A-Za-z0-9]*$",
+      "hint": "Use UpperCamelCase for port names."
+    }
+  ],
+  "fmea_tables": {}
+}

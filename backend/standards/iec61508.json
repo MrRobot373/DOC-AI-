@@ -1,0 +1,14 @@
+{
+  "id": "iec61508",
+  "name": "IEC 61508 (Functional Safety of E/E/PE Systems)",
+  "category": "IEC61508_COMPLIANCE",
+  "required_sections": [
+    {"id": "sil", "label": "SIL (Safety Integrity Level) declaration", "patterns": ["sil ", "safety integrity level"]},
+    {"id": "sif", "label": "Safety Function(s) defined", "patterns": ["safety function", "safety instrumented function", "sif"]},
+    {"id": "pfd", "label": "PFD / PFH target", "patterns": ["pfd", "pfh", "probability of failure"]},
+    {"id": "proof_test", "label": "Proof-test interval", "patterns": ["proof test", "proof-test"]},
+    {"id": "sff", "label": "Safe Failure Fraction (SFF)", "patterns": ["safe failure fraction", "sff"]},
+    {"id": "hft", "label": "Hardware Fault Tolerance (HFT)", "patterns": ["hardware fault tolerance", "hft"]}
+  ],
+  "fmea_tables": {}
+}
