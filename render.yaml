@@ -34,6 +34,7 @@ envVarGroups:
       - key: SUPABASE_JWT_SECRET            # verifies user JWTs locally (fast)
         sync: false
       - key: ALLOWED_ORIGINS                # e.g. https://your-app.vercel.app
+        sync: false
 
 services:
   - type: keyvalue
