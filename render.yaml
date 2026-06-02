@@ -1,22 +1,48 @@
-services:
-  - type: web
-    name: doc-ai-backend
-    env: python
-    buildCommand: "./build.sh"
-    startCommand: "cd backend && gunicorn -c ../gunicorn.conf.py app:app"
+# ============================================================
+# DOC-AI — Render Blueprint (Infrastructure as Code)
+# Render reads this file and provisions the services below, wired together.
+#
+# ACTIVE SETUP (works today, cheapest):
+#   • web — Flask API in a Docker image with LibreOffice baked in.
+#       → REAL page numbers (renders DOCX→PDF in-process via LibreOffice; no
+#         separate Gotenberg service needed).
+#       → Reviews run in-process (threading). Uploaded file + report live on the
+#         same disk, so everything works without shared storage.
+#
+# COST: the web service runs on the FREE plan (sleeps when idle). Switch
+# `plan: free` → `plan: starter` (~$7/mo) for an always-on instance.
+#
+# ---- SCALING UP later (durable queue: Redis + worker) ----
+# A separate worker is a different container with its OWN disk, so it can't read
+# the file the web service saved. Before enabling Redis+worker you must move
+# uploads/reports to shared object storage (e.g. Supabase Storage). Ask and I'll
+# wire that up; until then, keep the single-web setup below — it is correct and
+# already gives you real page numbers.
+# ============================================================
+
+envVarGroups:
+  - name: doc-ai-shared
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
-      - key: PORT
-        value: 10000
-      # Lock CORS to your frontend origin(s) in production:
-      - key: ALLOWED_ORIGINS
-        sync: false
-      # Reachable Gotenberg instance for accurate page numbers (optional):
-      - key: GOTENBERG_URL
-        sync: false
-      # Cloud persistence/auth (optional):
+      # Set these once in the Render dashboard after the blueprint is created.
       - key: VITE_SUPABASE_URL
         sync: false
       - key: VITE_SUPABASE_ANON_KEY
         sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY      # backend writes reviews/audit with this
+        sync: false
+      - key: SUPABASE_JWT_SECRET            # verifies user JWTs locally (fast)
+        sync: false
+      - key: ALLOWED_ORIGINS                # e.g. https://your-app.vercel.app
+
+services:
+  - type: web
+    name: doc-ai-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    plan: free                # → "starter" for always-on (no idle sleep)
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: 10000
+      - fromGroup: doc-ai-shared
