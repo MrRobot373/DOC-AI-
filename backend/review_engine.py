@@ -489,36 +489,53 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         chunks = get_section_chunks_smart(parsed_doc, target_chars=8000)
         total_chunks = len(chunks)
 
-        # Pass A — Text Quality + Technical combined (per chunk)
+        # Pass A — Text Quality + Technical combined (per chunk).
+        # SPEED: chunks are independent LLM calls, so run them concurrently. With a
+        # multi-key failover pool this also spreads load across keys. Tune with
+        # DOCAI_CONCURRENCY (default 5). Set to 1 to force sequential.
+        import concurrent.futures as _cf
+        concurrency = max(1, int(os.environ.get("DOCAI_CONCURRENCY", "5")))
+        seeds = [LLM_SEED, 137] if review_mode == "max" else [LLM_SEED]
+
+        def _do_chunk(args):
+            idx, chunk = args
+            out = []
+            for sd in seeds:
+                out.extend(_review_chunk_multipass(
+                    client, text_model, chunk, doc_summary, idx + 1,
+                    active_categories, glossary_text, seed=sd))
+            return out
+
         chunk_failures = 0
         chunk_count = 0
         last_chunk_error = None
-        for i, chunk in enumerate(chunks):
-            pct = 15 + int((i / max(total_chunks, 1)) * 50)  # 15% → 65%
-            if progress_callback:
-                progress_callback(f"AI Pass: Analyzing chunk {i + 1}/{total_chunks}...", pct)
-
-            try:
-                # B3 ensemble: in max mode, sample each chunk twice (two seeds) and
-                # union. Grounding + dedupe downstream remove the extra hallucinations
-                # the second sample introduces, so recall rises without FP inflation.
-                seeds = [LLM_SEED, 137] if review_mode == "max" else [LLM_SEED]
-                chunk_findings = []
-                for sd in seeds:
-                    chunk_findings.extend(
-                        _review_chunk_multipass(client, text_model, chunk, doc_summary, i + 1, active_categories, glossary_text, seed=sd)
-                    )
-                if chunk_findings:
-                    findings.extend(chunk_findings)
-                chunk_count += 1
-            except Exception as e:
-                chunk_failures += 1
-                last_chunk_error = str(e)
-                print(f"Error in chunk {i+1}: {e}")
-
-            # Free memory periodically
-            if i % 5 == 0:
-                gc.collect()
+        done = 0
+        if concurrency == 1 or total_chunks <= 1:
+            iterator = ((i, c) for i, c in enumerate(chunks))
+            for args in iterator:
+                try:
+                    findings.extend(_do_chunk(args))
+                    chunk_count += 1
+                except Exception as e:
+                    chunk_failures += 1
+                    last_chunk_error = str(e)
+                done += 1
+                if progress_callback:
+                    progress_callback(f"AI Pass: chunk {done}/{total_chunks}...", 15 + int((done / max(total_chunks, 1)) * 50))
+        else:
+            with _cf.ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures = {pool.submit(_do_chunk, (i, c)): i for i, c in enumerate(chunks)}
+                for fut in _cf.as_completed(futures):
+                    try:
+                        findings.extend(fut.result())
+                        chunk_count += 1
+                    except Exception as e:
+                        chunk_failures += 1
+                        last_chunk_error = str(e)
+                    done += 1
+                    if progress_callback:
+                        progress_callback(f"AI Pass: chunk {done}/{total_chunks}...", 15 + int((done / max(total_chunks, 1)) * 50))
+        gc.collect()
 
         # A pass "fails" only if EVERY chunk failed (e.g. bad model / no quota).
         if total_chunks and chunk_failures == total_chunks:
@@ -1536,7 +1553,7 @@ def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
     batches = [all_tables[i:i+BATCH_SIZE] for i in range(0, len(all_tables), BATCH_SIZE)]
     all_table_findings = []
 
-    for batch_idx, batch in enumerate(batches, 1):
+    def _build_table_prompt(batch, batch_idx):
         tables_text = []
         for tbl in batch:
             tbl_name = tbl.get("name", f"Table {tbl['index'] + 1}")
@@ -1546,7 +1563,7 @@ def _review_tables_with_llm(client, model, parsed_doc, active_categories=None):
             )
             tables_text.append(f"--- {tbl_name} ({tbl['num_rows']}×{tbl['num_cols']}) ---\n{rows_str}")
 
-        prompt = f"""You are reviewing TABLES (batch {batch_idx}/{len(batches)}) in an engineering technical document (HDD/WCCA/SCTM). Check EVERY table for:
+        return f"""You are reviewing TABLES (batch {batch_idx}/{len(batches)}) in an engineering technical document (HDD/WCCA/SCTM). Check EVERY table for:
 
 1. **Decimal place consistency**: Within each column, do all numerical values have the same number of decimal places?
 2. **Missing headers or unclear column names**
@@ -1579,13 +1596,27 @@ Return a JSON array. The `evidence` field is MANDATORY — copy the exact cell v
 
 Return ONLY the JSON array. If no issues, return [].
 """
+
+    def _run_batch(args):
+        batch_idx, batch = args
+        prompt = _build_table_prompt(batch, batch_idx)
         try:
-            batch_findings = _chat_findings(client, model, prompt, f"llm_tables_batch{batch_idx}")
-            if batch_findings:
-                all_table_findings.extend(batch_findings)
+            return _chat_findings(client, model, prompt, f"llm_tables_batch{batch_idx}", num_predict=8192)
         except Exception as e:
             print(f"[tables] batch {batch_idx}/{len(batches)} failed: {e}")
-            # Log but continue — remaining batches must still run
+            return []
+
+    # Run table batches concurrently (same knob as the chunk pass).
+    import concurrent.futures as _cf
+    concurrency = max(1, int(os.environ.get("DOCAI_CONCURRENCY", "5")))
+    indexed = list(enumerate(batches, 1))
+    if concurrency == 1 or len(indexed) <= 1:
+        for args in indexed:
+            all_table_findings.extend(_run_batch(args))
+    else:
+        with _cf.ThreadPoolExecutor(max_workers=concurrency) as pool:
+            for res in pool.map(_run_batch, indexed):
+                all_table_findings.extend(res)
 
     return all_table_findings
 

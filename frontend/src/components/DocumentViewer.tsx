@@ -43,64 +43,105 @@ interface DocumentViewerProps {
     highlightNonce?: number
 }
 
-// ── docx-preview helpers ─────────────────────────────────────────────────────
+// ── Robust cross-node text locator ──────────────────────────────────────────
+// docx-preview / PDF.js fragment text across many <span> runs, often with no
+// whitespace at run boundaries ("Maximum"+"Ratings" -> "MaximumRatings"). So we
+// search the CONCATENATED text of all nodes and map the match back to a DOM
+// Range that can span nodes — then highlight it with the CSS Custom Highlight API
+// (no DOM surgery) and scroll it into view.
 
-function normText(s: string): string {
-    return (s || "").replace(/\s+/g, " ").trim().toLowerCase()
+function escapeRegex(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-function clearDocxHighlights(container: HTMLElement) {
-    container.querySelectorAll("mark[data-docai]").forEach((m) => {
-        const parent = m.parentNode
-        if (!parent) return
-        parent.replaceChild(document.createTextNode(m.textContent || ""), m)
-        parent.normalize()
-    })
+function buildEvidenceRegex(evidence: string): RegExp | null {
+    const words = (evidence || "").trim().split(/\s+/).filter(Boolean).slice(0, 12)
+    if (words.length === 0) return null
+    // Join words with \s* so it matches across run boundaries that have no space.
+    return new RegExp(words.map(escapeRegex).join("\\s*"), "i")
 }
 
-function highlightInDocx(container: HTMLElement, evidence: string) {
-    clearDocxHighlights(container)
-    const words = normText(evidence).split(" ").filter(Boolean).slice(0, 8)
-    if (!words.length) return
-    const pattern = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+"), "i")
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
-    let node: Node | null
-    while ((node = walker.nextNode())) {
-        const text = node.textContent || ""
-        const match = pattern.exec(text)
-        if (!match) continue
-        const range = document.createRange()
-        range.setStart(node, match.index)
-        range.setEnd(node, match.index + match[0].length)
-        const mark = document.createElement("mark")
-        mark.setAttribute("data-docai", "1")
-        mark.style.cssText = "background:#fde047;color:#000;padding:1px 2px;border-radius:2px"
+interface NodeSpan { node: Text; start: number; end: number }
+
+function collectText(root: HTMLElement): { raw: string; spans: NodeSpan[] } {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    let raw = ""
+    const spans: NodeSpan[] = []
+    let n: Node | null
+    while ((n = walker.nextNode())) {
+        const t = n as Text
+        const txt = t.textContent || ""
+        if (!txt) continue
+        spans.push({ node: t, start: raw.length, end: raw.length + txt.length })
+        raw += txt
+    }
+    return { raw, spans }
+}
+
+function posToNode(spans: NodeSpan[], pos: number): { node: Text; offset: number } | null {
+    for (const s of spans) {
+        if (pos >= s.start && pos <= s.end) return { node: s.node, offset: pos - s.start }
+    }
+    return null
+}
+
+let _highlightStyleInjected = false
+function ensureHighlightStyle() {
+    if (_highlightStyleInjected) return
+    const style = document.createElement("style")
+    style.textContent = `::highlight(docai){background:#fde047;color:#000;} mark[data-docai]{background:#fde047;color:#000;border-radius:2px;}`
+    document.head.appendChild(style)
+    _highlightStyleInjected = true
+}
+
+/**
+ * Locate `evidence` anywhere within `root` (across nodes), highlight it, scroll
+ * it into view. Tries the full phrase, then shorter prefixes for resilience.
+ * Returns true if something was located.
+ */
+function locateAndHighlight(root: HTMLElement, evidence: string): boolean {
+    ensureHighlightStyle()
+    try { (CSS as any)?.highlights?.delete("docai") } catch { /* ignore */ }
+
+    const { raw, spans } = collectText(root)
+    if (!raw) return false
+
+    // Try the full evidence, then progressively shorter leading word-sets.
+    const words = (evidence || "").trim().split(/\s+/).filter(Boolean)
+    for (let take = Math.min(words.length, 12); take >= 2; take -= 2) {
+        const re = buildEvidenceRegex(words.slice(0, take).join(" "))
+        if (!re) continue
+        const m = re.exec(raw)
+        if (!m) continue
+        const startPos = m.index
+        const endPos = m.index + m[0].length
+        const a = posToNode(spans, startPos)
+        const b = posToNode(spans, endPos)
+        if (!a || !b) continue
         try {
-            range.surroundContents(mark)
-            mark.scrollIntoView({ behavior: "smooth", block: "center" })
+            const range = document.createRange()
+            range.setStart(a.node, a.offset)
+            range.setEnd(b.node, b.offset)
+            // CSS Custom Highlight API (cross-node, no DOM mutation).
+            if ((CSS as any)?.highlights && typeof (window as any).Highlight === "function") {
+                ;(CSS as any).highlights.set("docai", new (window as any).Highlight(range))
+            }
+            // Scroll the match into view regardless of highlight support.
+            const target = (a.node.parentElement as HTMLElement) || root
+            target.scrollIntoView({ behavior: "smooth", block: "center" })
+            // Brief outline pulse on the containing element as a visual cue.
+            target.style.transition = "background 0.2s"
+            const prev = target.style.background
+            target.style.background = "rgba(253,224,71,0.25)"
+            setTimeout(() => { target.style.background = prev }, 1800)
+            return true
         } catch {
-            ;(node.parentElement as HTMLElement)?.scrollIntoView({ behavior: "smooth", block: "center" })
-        }
-        return
-    }
-}
-
-// ── PDF text-layer highlight ─────────────────────────────────────────────────
-
-function highlightInPdf(container: HTMLElement, evidence: string) {
-    const words = normText(evidence).split(" ").filter(Boolean).slice(0, 8)
-    if (!words.length) return
-    const spans = Array.from(container.querySelectorAll(".react-pdf__Page__textContent span"))
-    const pattern = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+"), "i")
-    for (const span of spans) {
-        if (pattern.test(span.textContent || "")) {
-            span.setAttribute("data-docai", "1")
-            ;(span as HTMLElement).style.cssText =
-                "background:rgba(253,224,71,0.5);border-radius:2px;outline:2px solid #f59e0b"
-            span.scrollIntoView({ behavior: "smooth", block: "center" })
-            break
+            const target = (a.node.parentElement as HTMLElement)
+            target?.scrollIntoView({ behavior: "smooth", block: "center" })
+            return true
         }
     }
+    return false
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -160,18 +201,21 @@ export default function DocumentViewer({
         if (usePdf && targetPage && targetPage >= 1) setCurrentPage(targetPage)
     }, [targetPage, highlightNonce, usePdf])
 
-    // Highlight text in whichever viewer is active.
+    // Highlight text in whichever viewer is active. The container may still be
+    // rendering (docx-preview / PDF text layer), so retry a few times.
     useEffect(() => {
         if (!highlight) return
-        if (usePdf && pdfContainerRef.current) {
-            // Small delay so the page has rendered its text layer.
-            const timer = setTimeout(() => {
-                if (pdfContainerRef.current) highlightInPdf(pdfContainerRef.current, highlight)
-            }, 400)
-            return () => clearTimeout(timer)
-        } else if (!usePdf && docxContainerRef.current) {
-            highlightInDocx(docxContainerRef.current, highlight)
+        let cancelled = false
+        let attempts = 0
+        const tick = () => {
+            if (cancelled) return
+            const root = usePdf ? pdfContainerRef.current : docxContainerRef.current
+            const found = root ? locateAndHighlight(root, highlight) : false
+            attempts += 1
+            if (!found && attempts < 12) setTimeout(tick, 300)  // up to ~3.6s while it renders
         }
+        const start = setTimeout(tick, usePdf ? 400 : 150)
+        return () => { cancelled = true; clearTimeout(start) }
     }, [highlight, highlightNonce, usePdf, currentPage])
 
     // ── Render ────────────────────────────────────────────────────────────────
