@@ -82,11 +82,15 @@ class EnginePipelineTests(unittest.TestCase):
             return findings, status
 
     def test_pipeline_runs_and_grounds(self):
+        # Recall-first: in Pro mode NOTHING is dropped. The ungrounded "flux
+        # capacitor" finding is KEPT but flagged grounded=False at low confidence,
+        # while the grounded finding stays high-confidence.
         findings, status = self._run()
-        # Hallucinated "flux capacitor" finding must be dropped by grounding.
-        comments = " ".join(f["comment"] for f in findings).lower()
-        self.assertNotIn("flux capacitor", comments)
-        # The grounded finding survives and is anchored to a real page.
+        flux = [f for f in findings if "flux capacitor" in f["comment"].lower()]
+        self.assertTrue(flux, "Ungrounded findings should be kept (recall-first), not dropped")
+        self.assertFalse(flux[0].get("grounded", True), "Ungrounded finding should be flagged grounded=False")
+        self.assertLessEqual(flux[0]["confidence"], 0.4, "Ungrounded finding should be low-confidence")
+
         grounded = [f for f in findings if "scope statement" in f["comment"].lower()]
         self.assertTrue(grounded, "Expected the grounded finding to survive")
         # Every finding carries the new schema fields.
@@ -94,8 +98,18 @@ class EnginePipelineTests(unittest.TestCase):
             self.assertIn("evidence", f)
             self.assertIn("para_index", f)
             self.assertIn("confidence", f)
-        # Per-pass status is reported.
         self.assertIn("passes", status)
+
+    def test_max_mode_drops_low_confidence(self):
+        # Max mode IS the precision cut: the ungrounded low-confidence finding is
+        # removed, the grounded one stays.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fixture.docx"
+            _build_doc(path)
+            parsed = parse_document(str(path))
+            findings = review_document(FakeOllamaClient(), "fake-model", parsed, review_mode="max")
+        comments = " ".join(f["comment"] for f in findings).lower()
+        self.assertNotIn("flux capacitor", comments)
 
     def test_pipeline_is_deterministic(self):
         a, _ = self._run()

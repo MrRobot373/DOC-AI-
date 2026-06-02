@@ -26,13 +26,18 @@ class CliExitCodeTests(unittest.TestCase):
         cli._build_client = self._orig
         self.tmp.cleanup()
 
-    def _run(self, *extra):
-        argv = ["review", str(self.doc), "--mode", "pro", "--quiet", *extra]
+    def _run(self, *extra, mode="pro"):
+        argv = ["review", str(self.doc), "--mode", mode, "--quiet", *extra]
         return cli.main(argv)
 
-    def test_clean_when_failon_critical(self):
-        # The mock yields a MINOR grammar finding only — no CRITICAL.
-        self.assertEqual(self._run("--fail-on", "critical"), 0)
+    def test_clean_when_failon_critical_in_max(self):
+        # The mock's only CRITICAL is ungrounded; Max mode drops it, so a
+        # --fail-on critical gate passes (exit 0). (Recall-first Pro would keep it.)
+        self.assertEqual(self._run("--fail-on", "critical", mode="max"), 0)
+
+    def test_fail_on_ungrounded_critical_in_pro(self):
+        # Pro keeps the ungrounded CRITICAL (recall-first) → gate trips (exit 1).
+        self.assertEqual(self._run("--fail-on", "critical", mode="pro"), 1)
 
     def test_fail_when_failon_minor(self):
         # A MINOR finding exists, so --fail-on minor must return exit 1.

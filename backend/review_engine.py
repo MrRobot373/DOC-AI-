@@ -621,13 +621,20 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
     if findings:
         # Drop hallucinated LLM findings + anchor survivors to a paragraph (0.4/0.8).
         findings = _ground_and_anchor_findings(findings, parsed_doc)
-        # Critic pass (Pro/Max): second opinion to cut false positives (0.5).
+        # Critic pass (Pro/Max): second opinion that SCORES confidence (no longer
+        # deletes — recall-first). Local findings stay at 1.0.
         if review_mode in ("pro", "max"):
             try:
                 findings = _critic_filter_findings(client, text_model, findings, progress_callback)
             except Exception as e:
                 print(f"Critic pass skipped: {e}")
+        # Cap ungrounded LLM findings BEFORE the Max precision cut so they're the
+        # ones trimmed (their evidence isn't verbatim in the document).
+        for f in findings:
+            if f.get("grounded") is False:
+                f["confidence"] = min(float(f.get("confidence", 0.5) or 0.5), 0.4)
         # Max = strictest: keep only high-confidence findings (precision over recall).
+        # Pro/Normal keep everything — use the confidence slider to trim.
         if review_mode == "max":
             findings = [f for f in findings if float(f.get("confidence", 1.0)) >= 0.5]
         findings = _deduplicate_findings(findings)
@@ -648,6 +655,10 @@ def review_document(client, model, parsed_doc, progress_callback=None, review_mo
         if "status" not in f:
             f["status"] = "OPEN"
         f.setdefault("confidence", 1.0 if not str(f.get("source", "")).startswith(("llm", "vision")) else 0.7)
+        # Ungrounded LLM findings (evidence not verbatim in the doc) are kept but
+        # capped at lower confidence so the slider/Max mode can trim them.
+        if f.get("grounded") is False:
+            f["confidence"] = min(float(f.get("confidence", 0.5)), 0.4)
 
     # Publish per-pass status so the caller can warn the user about failed AI passes.
     if status_out is not None:
@@ -1269,7 +1280,10 @@ def _review_chunk_multipass(client, model, chunk_text, doc_summary, chunk_num, a
     prompt = f"""You are an expert senior technical document reviewer for automotive/embedded systems engineering.
 You are reviewing a Hardware Design Document (HDD), WCCA report, or SCTM for a commercial product.
 
-Your job is to find EVERY real issue. You must be thorough but precise — only flag genuine problems.
+Your job is to find EVERY real issue. BE EXHAUSTIVE: report every individual issue
+you find in this section — do NOT summarize, group, cap, or stop early. If a section
+has 20 issues, return 20 findings. A separate verification step handles precision,
+so err on the side of reporting MORE rather than fewer.
 
 ## MANDATORY CHECKS (check ALL of these):
 
@@ -1331,9 +1345,9 @@ If no issues found, return [].
     if cached is not None:
         return cached
 
-    # Deterministic, schema-constrained call. Errors propagate to the
-    # orchestrator so they can be recorded as a per-pass failure (not swallowed).
-    findings = _chat_findings(client, model, prompt, f"llm_chunk_{chunk_num}", seed=seed)
+    # Deterministic, schema-constrained call. num_predict raised so a dense chunk
+    # with many issues isn't truncated mid-JSON (which silently dropped findings).
+    findings = _chat_findings(client, model, prompt, f"llm_chunk_{chunk_num}", num_predict=8192, seed=seed)
     _cache_put(cache_key, findings)
     return findings
 
@@ -1835,33 +1849,30 @@ def _ground_and_anchor_findings(findings, parsed_doc):
             continue
 
         if is_llm:
+            f.setdefault("grounded", True)
             evidence = f.get("evidence", "").strip()
             # Image/vision findings describe a picture, not quotable text — exempt.
             is_image = source.startswith("vision") or "image" in source or f.get("image_ref")
             if not is_image:
                 # When evidence is empty, try to salvage a quote from the comment.
-                # Many models quote the exact text in the comment with "..." or "".
                 if not evidence:
                     comment = f.get("comment", "")
-                    # Extract first quoted phrase (double or single quotes)
                     m = re.search(r'"([^"]{8,120})"|\'([^\']{8,120})\'|"([^"]{8,120})"', comment)
                     if m:
                         evidence = (m.group(1) or m.group(2) or m.group(3)).strip()
                         f["evidence"] = evidence
                     else:
-                        # Last resort: use first 60 chars of the comment as a soft anchor
-                        # (does NOT drop here — we'll let the token check decide)
                         evidence = comment[:60].strip()
 
-                if not evidence:
-                    continue  # truly empty after all attempts → drop
-
+                # RECALL-FIRST: we no longer DROP ungrounded findings — we keep them
+                # and mark grounded=False so the confidence score reflects the lower
+                # certainty. The user filters with the confidence slider; Max mode
+                # applies a hard precision cut. This is why a 100-issue doc no longer
+                # collapses to ~15 findings.
                 ev_norm = _norm_text(evidence)
                 tokens = [t for t in re.findall(r"[a-z0-9]{4,}", ev_norm) if len(t) > 3]
-                # Only drop when we have tokens AND none appear in the document.
-                # When evidence is a salvaged comment excerpt, give it a lighter check.
-                if tokens and not any(tok in doc_text for tok in tokens[:4]):
-                    continue  # evidence not in document → likely hallucination → drop
+                if not evidence or (tokens and not any(tok in doc_text for tok in tokens[:4])):
+                    f["grounded"] = False
 
                 # Anchor to the first paragraph that contains the evidence snippet.
                 snippet = ev_norm[:40]
@@ -1939,11 +1950,14 @@ Return ONLY a JSON array of verdicts: {{"id": <int>, "keep": <bool>, "confidence
                 v = verdict_by_id.get(i)
                 if v is None:
                     f.setdefault("confidence", 0.5)
-                    verified.append(f)
                 elif v.get("keep", True):
                     f["confidence"] = round(float(v.get("confidence", 0.7)), 2)
-                    verified.append(f)
-                # keep == False → dropped
+                else:
+                    # RECALL-FIRST: the critic no longer DELETES findings. A "drop"
+                    # verdict just lowers confidence so the user can hide it with the
+                    # slider (or Max mode cuts it). Nothing is silently lost.
+                    f["confidence"] = min(round(float(v.get("confidence", 0.25)), 2), 0.35)
+                verified.append(f)
         except Exception as e:
             if errors is not None:
                 errors.append(f"critic: {str(e)[:140]}")
