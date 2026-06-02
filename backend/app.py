@@ -127,6 +127,13 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     print("[*] Supabase: not configured — using local JSON state only")
 
+# Shared object storage for uploads/reports (enables a split worker + restart-safe
+# auto-fix). Uses Supabase Storage buckets when available; local disk otherwise.
+import storage as _storage
+_storage.init(supabase)
+if _storage.enabled():
+    print("[*] Storage: Supabase buckets (shared across web/worker)")
+
 
 # ── JWT Auth helper ─────────────────────────────────────────────────────────
 def _get_user_id_from_token():
@@ -492,6 +499,13 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         _save_store(store)
         _supabase_upsert_review(review_id, user_id, parsing_update)
 
+        # In a split web/worker deployment the file was uploaded on a different
+        # disk — pull it from shared storage if it isn't here locally.
+        if not os.path.exists(filepath):
+            fetched = _storage.ensure_local(os.path.basename(filepath), UPLOAD_DIR, _storage.UPLOADS_BUCKET)
+            if fetched:
+                filepath = fetched
+
         if file_type == "excel":
             parsed = parse_excel(filepath)
         else:
@@ -578,6 +592,11 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         )
         report_path = os.path.join(REPORTS_DIR, report_filename)
         generate_excel_report(findings, original_filename, report_path)
+        _storage.put_report(report_path, report_filename)
+        # If a PDF was rendered for the viewer, share it too.
+        _pdf_name = parsed.get("metadata", {}).get("pdf_filename")
+        if _pdf_name:
+            _storage.put_report(os.path.join(REPORTS_DIR, _pdf_name), _pdf_name)
 
         # Build stats
         severity_counts = {}
@@ -726,9 +745,12 @@ def start_review():
     filename = f"{review_id}_{safe_name}"
     filepath = os.path.join(UPLOAD_DIR, filename)
     file.save(filepath)
+    # Push to shared storage so a separate worker (different disk) can read it.
+    _storage.put_upload(filepath, filename)
 
-    # Initialize progress
-    initial = {"status": "starting", "message": "Uploading document...", "progress": 5}
+    # Initialize progress (store the upload key so the worker can fetch it)
+    initial = {"status": "starting", "message": "Uploading document...", "progress": 5,
+               "upload_key": filename}
     store = _load_store()
     store[review_id] = initial
     _save_store(store)
@@ -835,15 +857,21 @@ def update_finding(review_id):
 @require_auth
 def apply_fixes(review_id):
     """Apply auto-fixable findings to a copy of the document."""
-    store = _load_store()
-    if review_id not in store or store[review_id].get("status") != "done":
+    record = _get_review_record(review_id)
+    if not record or record.get("status") != "done":
         return jsonify({"success": False, "error": "Review not found or not complete"}), 404
 
     data = request.get_json() or {}
     finding_ids = data.get("finding_ids")  # None = apply all auto-fixable
 
-    findings = store[review_id].get("findings", [])
-    original_filepath = store[review_id].get("original_filepath")
+    findings = record.get("findings", [])
+    original_filepath = record.get("original_filepath")
+
+    # Pull the original upload from shared storage if it's not on this disk.
+    if original_filepath and not os.path.exists(original_filepath):
+        _storage.ensure_local(os.path.basename(original_filepath), UPLOAD_DIR, _storage.UPLOADS_BUCKET)
+    elif not original_filepath and record.get("upload_key"):
+        original_filepath = _storage.ensure_local(record["upload_key"], UPLOAD_DIR, _storage.UPLOADS_BUCKET)
 
     if not original_filepath or not os.path.exists(original_filepath):
         return jsonify({"success": False, "error": "Original document no longer available. Please re-upload."}), 404
@@ -853,6 +881,7 @@ def apply_fixes(review_id):
         result = do_apply_fixes(original_filepath, findings, finding_ids)
         if result["success"]:
             fixed_filename = result["fixed_filename"]
+            _storage.put_report(os.path.join(REPORTS_DIR, fixed_filename), fixed_filename)
             return jsonify({
                 "success": True,
                 "fixed_filename": fixed_filename,
@@ -899,6 +928,10 @@ def download_report(report_filename):
         except Exception as e:
             print(f"Report regeneration error: {e}")
 
+    # Last resort: pull the report from shared storage (worker generated it elsewhere).
+    if not os.path.exists(report_path):
+        _storage.ensure_local(os.path.basename(report_filename), REPORTS_DIR, _storage.REPORTS_BUCKET)
+
     if os.path.exists(report_path):
         return send_file(
             report_path,
@@ -915,6 +948,8 @@ def download_fixed_doc(filename):
     fixed_path = _safe_under(REPORTS_DIR, filename)
     if not fixed_path:
         return jsonify({"error": "Invalid file name"}), 400
+    if not os.path.exists(fixed_path):
+        _storage.ensure_local(os.path.basename(filename), REPORTS_DIR, _storage.REPORTS_BUCKET)
     if os.path.exists(fixed_path):
         return send_file(
             fixed_path,
@@ -927,12 +962,11 @@ def download_fixed_doc(filename):
 @app.route("/api/export-pdf/<review_id>")
 def export_pdf(review_id):
     """Render the findings report as a paginated PDF and return it."""
-    store = _load_store()
-    data = store.get(review_id, {})
+    data = _get_review_record(review_id) or {}
     findings = data.get("findings")
     if findings is None:
         return jsonify({"error": "Review not found or not complete"}), 404
-    doc_name = data.get("document_info", {}).get("filename", "Document")
+    doc_name = (data.get("document_info") or {}).get("filename", "Document")
     out_name = f"Report_{secure_filename(os.path.splitext(doc_name)[0]) or 'document'}_{review_id}.pdf"
     out_path = os.path.join(REPORTS_DIR, out_name)
     try:
@@ -948,8 +982,7 @@ def export_pdf(review_id):
 @app.route("/api/pdf/<review_id>")
 def serve_pdf(review_id):
     """Serve the Gotenberg/soffice-rendered PDF for the PDF.js viewer."""
-    store = _load_store()
-    data = store.get(review_id, {})
+    data = _get_review_record(review_id) or {}
     if not data:
         return jsonify({"error": "Review not found"}), 404
 
@@ -958,8 +991,13 @@ def serve_pdf(review_id):
         return jsonify({"error": "No rendered PDF available for this review — page locator used heuristic mode"}), 404
 
     pdf_path = _safe_under(REPORTS_DIR, pdf_filename)
-    if not pdf_path or not os.path.exists(pdf_path):
-        return jsonify({"error": "PDF file not found on disk"}), 404
+    if not pdf_path:
+        return jsonify({"error": "Invalid PDF name"}), 400
+    # Pull from shared storage if the worker rendered it on a different disk.
+    if not os.path.exists(pdf_path):
+        _storage.ensure_local(os.path.basename(pdf_filename), REPORTS_DIR, _storage.REPORTS_BUCKET)
+    if not os.path.exists(pdf_path):
+        return jsonify({"error": "PDF file not found"}), 404
 
     return send_file(pdf_path, mimetype="application/pdf")
 
@@ -1072,6 +1110,10 @@ def _run_batch_in_background(batch_id, files, api_key, host, model, review_mode,
             pct = 5 + int((i / max(total, 1)) * 75)
             s = _load_store(); s[batch_id].update({"progress": pct, "message": f"Reviewing {fname} ({i+1}/{total})..."}); _save_store(s)
             is_excel = fname.lower().endswith((".xlsx", ".xls"))
+            if not os.path.exists(fpath):
+                fetched = _storage.ensure_local(os.path.basename(fpath), UPLOAD_DIR, _storage.UPLOADS_BUCKET)
+                if fetched:
+                    fpath = fetched
             parsed = parse_excel(fpath) if is_excel else parse_document(fpath)
             if not is_excel:
                 try:
@@ -1101,6 +1143,7 @@ def _run_batch_in_background(batch_id, files, api_key, host, model, review_mode,
         report_name = f"Suite_Report_{batch_id}_{datetime.now():%Y%m%d_%H%M}.xlsx"
         report_path = os.path.join(REPORTS_DIR, report_name)
         generate_batch_report(per_doc, cross, report_path)
+        _storage.put_report(report_path, report_name)
 
         sev_counts = {}
         for f in all_findings:
@@ -1179,6 +1222,7 @@ def start_batch_review():
                     out = os.path.join(UPLOAD_DIR, f"{batch_id}_{safe}")
                     with open(out, "wb") as fh:
                         fh.write(zf.read(member))
+                    _storage.put_upload(out, os.path.basename(out))
                     saved.append((out, base))
         except Exception as e:
             return jsonify({"success": False, "error": f"Could not read zip: {e}"})
@@ -1187,6 +1231,7 @@ def start_batch_review():
             safe = secure_filename(f.filename) or "document"
             out = os.path.join(UPLOAD_DIR, f"{batch_id}_{safe}")
             f.save(out)
+            _storage.put_upload(out, os.path.basename(out))
             saved.append((out, f.filename))
 
     if len(saved) < 1:
