@@ -1643,12 +1643,8 @@ def _review_images_with_llm(client, model, parsed_doc, doc_summary="", progress_
     # Per-image errors are caught individually so one failure never stops the rest.
     reviewable_images = [img for img in parsed_doc["images"] if img.get("full_b64") and not img.get("is_small")]
     total_images = len(reviewable_images)
-    
-    for idx, img in enumerate(reviewable_images):
-        if progress_callback:
-            pct = 82 + int((idx / max(total_images, 1)) * 10)  # 82% → 92%
-            progress_callback(f"Analyzing image {idx + 1}/{total_images} with vision AI...", pct)
-        
+
+    def _review_one_image(idx, img):
         prompt = f"""You are reviewing a DIAGRAM / GRAPH / IMAGE in a technical engineering document.
 
 You have TWO jobs:
@@ -1688,25 +1684,44 @@ Return a JSON array of findings. Each finding must be:
 IMPORTANT: Use severity CRITICAL if image data contradicts the document text. Use MAJOR for missing labels. Use MINOR for formatting issues.
 Return ONLY the JSON array. If no issues, return [].
 """
-            
         # Per-image try/except keeps one bad image from aborting the whole pass;
-        # failures are recorded so the orchestrator can surface them (0.3).
+        # failures are recorded so the orchestrator can surface them.
         try:
             img_findings = _chat_findings(
                 client, model, prompt, f"llm_image_{idx}",
                 images=[img["full_b64"]], num_predict=2048,
             )
             for f in img_findings:
-                if f["section"] in ("-", "Image / Diagram"):
+                if f.get("section") in ("-", "Image / Diagram"):
                     f["section"] = f"Image {idx + 1}"
                 f["image_ref"] = idx + 1
-            findings.extend(img_findings)
+            return img_findings
         except Exception as e:
             if errors is not None:
                 errors.append(f"Image {idx + 1}: {str(e)[:160]}")
             print(f"Error during image {idx} review: {str(e)}")
-            continue
-            
+            return []
+
+    # Vision calls are independent → run them concurrently (same DOCAI_CONCURRENCY
+    # knob as the text/table passes). 177 images one-at-a-time was the slowest pass.
+    import concurrent.futures as _cf
+    concurrency = max(1, int(os.environ.get("DOCAI_CONCURRENCY", "5")))
+    done = 0
+    if concurrency == 1 or total_images <= 1:
+        for idx, img in enumerate(reviewable_images):
+            findings.extend(_review_one_image(idx, img))
+            done += 1
+            if progress_callback:
+                progress_callback(f"Analyzing image {done}/{total_images} with vision AI...", 82 + int((done / max(total_images, 1)) * 10))
+    else:
+        with _cf.ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futs = {pool.submit(_review_one_image, idx, img): idx for idx, img in enumerate(reviewable_images)}
+            for fut in _cf.as_completed(futs):
+                findings.extend(fut.result())
+                done += 1
+                if progress_callback:
+                    progress_callback(f"Analyzing images {done}/{total_images} with vision AI...", 82 + int((done / max(total_images, 1)) * 10))
+
     return findings
 
 
