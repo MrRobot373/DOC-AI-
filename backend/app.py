@@ -92,6 +92,13 @@ REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
+# Thread-safe access to the local JSON store. Without this lock, concurrent
+# threads (gunicorn gthread with 8 threads) can read stale data or corrupt
+# the file, causing "Review not found" on the very first poll.
+import time as _time
+_store_lock = threading.Lock()
+_recent_review_ids: dict[str, float] = {}  # review_id -> creation timestamp
+
 # Background execution: a durable Redis+RQ queue when REDIS_URL is set (crash-safe,
 # multi-worker, survives restarts), otherwise in-process threads for local/dev.
 REDIS_URL = os.environ.get("REDIS_URL")
@@ -154,18 +161,28 @@ def _get_user_id_from_token():
     if SUPABASE_JWT_SECRET:
         try:
             import jwt as pyjwt
-            payload = pyjwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"],
+            # Supabase JWT secrets are base64-encoded. Try decoding it first.
+            try:
+                import base64
+                # Add padding if needed
+                padded_secret = SUPABASE_JWT_SECRET + "=" * (-len(SUPABASE_JWT_SECRET) % 4)
+                key = base64.b64decode(padded_secret)
+            except Exception:
+                key = SUPABASE_JWT_SECRET
+
+            payload = pyjwt.decode(token, key, algorithms=["HS256"],
                                    options={"verify_aud": False})
             return payload.get("sub")
-        except Exception:
-            return None
+        except Exception as e:
+            print(f"[*] Local JWT decode failed: {e}. Trying Supabase API fallback...")
 
     # Fallback: ask Supabase to verify (adds a small round-trip).
     if supabase:
         try:
             user = supabase.auth.get_user(token)
             return user.user.id if user and user.user else None
-        except Exception:
+        except Exception as e:
+            print(f"[*] Supabase get_user API fallback failed: {e}")
             return None
     return None
 
@@ -256,16 +273,38 @@ def _user_notify_email(user_id):
 
 def _get_pool_key():
     """Pick the highest-priority active key from the shared pool. None if empty."""
+    from review_engine import HARDCODED_POOL_KEYS
+    api_key_str = ",".join(HARDCODED_POOL_KEYS)
+
     if not supabase:
-        return None
+        return {
+            "api_key": api_key_str,
+            "host_url": "https://ollama.com",
+            "label": "Hardcoded Key Rotation Pool",
+            "provider": "Ollama Cloud"
+        }
+
     try:
         r = (supabase.table("llm_pool_keys")
              .select("*").eq("active", True)
              .order("priority", desc=False).limit(1).execute())
-        return r.data[0] if r.data else None
+        if r.data:
+            db_key = r.data[0]
+            db_api_key = db_key.get("api_key", "")
+            if db_api_key:
+                db_key["api_key"] = f"{db_api_key},{api_key_str}"
+            else:
+                db_key["api_key"] = api_key_str
+            return db_key
     except Exception as e:
         print(f"Pool key fetch error: {e}")
-        return None
+
+    return {
+        "api_key": api_key_str,
+        "host_url": "https://ollama.com",
+        "label": "Hardcoded Key Rotation Pool",
+        "provider": "Ollama Cloud"
+    }
 
 
 def _log_audit(user_id, user_email, action, review_id=None, metadata=None):
@@ -287,7 +326,9 @@ STATE_FILE = os.path.join(UPLOAD_DIR, "review_state.json")
 def _load_store():
     """Local JSON store (fast, in-process). The durable copy lives in the Supabase
     `reviews` table, written per-review by _supabase_upsert_review and read back by
-    _get_review_record when a review isn't in this local store (e.g. after a restart)."""
+    _get_review_record when a review isn't in this local store (e.g. after a restart).
+
+    MUST be called while holding _store_lock."""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, 'r') as f:
@@ -298,7 +339,9 @@ def _load_store():
 
 def _save_store(store):
     """Persist the local JSON store. Durable DB writes go through
-    _supabase_upsert_review at parsing/done/error (with the owning user_id)."""
+    _supabase_upsert_review at parsing/done/error (with the owning user_id).
+
+    MUST be called while holding _store_lock."""
     try:
         with open(STATE_FILE, 'w') as f:
             json.dump(store, f)
@@ -309,9 +352,10 @@ def _save_store(store):
 def _get_review_record(review_id):
     """Return a review dict from the local store, falling back to the Supabase
     `reviews` table (survives dyno restarts / ephemeral disk). None if not found."""
-    store = _load_store()
-    if review_id in store:
-        return store[review_id]
+    with _store_lock:
+        store = _load_store()
+        if review_id in store:
+            return store[review_id]
     if supabase:
         try:
             r = supabase.table("reviews").select("*").eq("id", review_id).single().execute()
@@ -319,6 +363,17 @@ def _get_review_record(review_id):
                 return r.data
         except Exception as e:
             print(f"reviews fetch error: {e}")
+    # Check if this is a brand-new review that was just created (race-condition
+    # window: the /api/review endpoint registered the ID but the store write
+    # hasn't been picked up by this read yet). Return a synthetic "starting"
+    # status so the frontend shows "Initializing..." instead of "Review not found".
+    if review_id in _recent_review_ids:
+        age = _time.time() - _recent_review_ids[review_id]
+        if age < 60:  # 60-second grace window
+            return {"status": "starting", "message": "Initializing review...", "progress": 5}
+        else:
+            # Stale entry; clean it up
+            _recent_review_ids.pop(review_id, None)
     return None
 
 
@@ -334,6 +389,10 @@ def _requires_api_key(host):
     """
     h = (host or "").lower()
     if "localhost" in h or "127.0.0.1" in h or "0.0.0.0" in h or "host.docker.internal" in h:
+        return False
+    # Since we have a hardcoded failover key rotation pool for cloud Ollama,
+    # we don't strictly require a user-provided API key for https://ollama.com.
+    if h == "https://ollama.com":
         return False
     return True
 
@@ -488,15 +547,16 @@ def _categories_for_mode(review_mode=None):
 
 def _run_review_in_background(review_id, filepath, original_filename, api_key, host, model, review_mode="pro", file_type="doc", vision_model=None, user_id=None, standards=None, glossary=None):
     """Background worker that runs the full document review."""
-    store = _load_store()
     try:
         # Parse document
-        if review_id not in store:
-            store[review_id] = {}
-        
-        parsing_update = {"status": "parsing", "message": "Parsing document...", "progress": 10}
-        store[review_id].update(parsing_update)
-        _save_store(store)
+        with _store_lock:
+            store = _load_store()
+            if review_id not in store:
+                store[review_id] = {}
+
+            parsing_update = {"status": "parsing", "message": "Parsing document...", "progress": 10}
+            store[review_id].update(parsing_update)
+            _save_store(store)
         _supabase_upsert_review(review_id, user_id, parsing_update)
 
         # In a split web/worker deployment the file was uploaded on a different
@@ -516,12 +576,14 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
                 enrich_pages(parsed, filepath, pdf_save_dir=REPORTS_DIR)
             except Exception as e:
                 print(f"Page enrichment skipped: {e}")
-        store = _load_store()
-        store[review_id].update({
-            "progress": 20,
-            "message": f"Document parsed: {parsed['statistics']['total_words']} words, {parsed['statistics']['total_sections']} sections. Starting AI review..."
-        })
-        _save_store(store)
+        with _store_lock:
+            store = _load_store()
+            if review_id in store:
+                store[review_id].update({
+                    "progress": 20,
+                    "message": f"Document parsed: {parsed['statistics']['total_words']} words, {parsed['statistics']['total_sections']} sections. Starting AI review..."
+                })
+                _save_store(store)
 
         # "Auto" mode: user opted into the shared admin pool — override the
         # host/key/model with the highest-priority active pool key.
@@ -536,6 +598,12 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
                     vision_model = pool["vision_model_hint"]
                 print(f"[Pool] Using shared pool key '{pool.get('label') or pool.get('provider')}' for review {review_id}")
 
+        # GLOBAL FALLBACK: If api_key is still empty and it's cloud Ollama, use the hardcoded keys!
+        if not api_key and (host or "").lower() == "https://ollama.com":
+            from review_engine import HARDCODED_POOL_KEYS
+            api_key = ",".join(HARDCODED_POOL_KEYS)
+            print(f"[Fallback] Using hardcoded failover key rotation pool for review {review_id}")
+
         # Create Ollama client (supports failover with multiple keys).
         # api_key may be empty for a local Ollama — create_ollama_client
         # handles the no-key case by sending no Authorization header.
@@ -549,19 +617,20 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
 
         # Progress callback
         def progress_cb(msg, explicit_pct=None):
-            s = _load_store()
-            if review_id not in s: return
-            if explicit_pct is not None:
-                new_progress = explicit_pct
-            else:
-                current = s[review_id].get("progress", 20)
-                new_progress = min(current + 5, 88)
-            s[review_id].update({
-                "progress": new_progress,
-                "message": msg,
-                "status": "reviewing"
-            })
-            _save_store(s)
+            with _store_lock:
+                s = _load_store()
+                if review_id not in s: return
+                if explicit_pct is not None:
+                    new_progress = explicit_pct
+                else:
+                    current = s[review_id].get("progress", 20)
+                    new_progress = min(current + 5, 88)
+                s[review_id].update({
+                    "progress": new_progress,
+                    "message": msg,
+                    "status": "reviewing"
+                })
+                _save_store(s)
 
         # Run review — single unified engine. `review_mode` acts as a strictness
         # knob (normal < pro < max); max is pro + a high-confidence filter.
@@ -577,12 +646,14 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
         )
 
         # Generate report
-        store = _load_store()
-        store[review_id].update({
-            "progress": 92,
-            "message": f"Found {len(findings)} issues. Generating Excel report..."
-        })
-        _save_store(store)
+        with _store_lock:
+            store = _load_store()
+            if review_id in store:
+                store[review_id].update({
+                    "progress": 92,
+                    "message": f"Found {len(findings)} issues. Generating Excel report..."
+                })
+                _save_store(store)
 
         mode_suffix = {"normal": "Normal", "pro": "Pro", "max": "Max"}.get(review_mode, "Pro")
         report_base = secure_filename(os.path.splitext(original_filename)[0]) or "document"
@@ -615,44 +686,50 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
             if "fix_type" not in f:
                 f["fix_type"] = f.get("fix_type", "MANUAL")
 
-        store = _load_store()
-        store[review_id].update({
-            "status": "done",
-            "message": "Review complete!",
-            "progress": 100,
-            "report_filename": report_filename,
-            "pdf_filename": parsed.get("metadata", {}).get("pdf_filename"),
-            "review_mode": review_mode,
-            "original_filepath": filepath,
-            "engine_status": engine_status,
-            "document_info": {
-                "filename": original_filename,
-                "words": parsed["statistics"]["total_words"],
-                "sections": parsed["statistics"]["total_sections"],
-                "tables": parsed["statistics"]["total_tables"],
-                "images": parsed["statistics"]["total_images"],
-            },
-            "findings": findings,
-            "summary": {
-                "total_findings": len(findings),
-                "severity_counts": severity_counts,
-                "category_counts": {
-                    k: {
-                        "count": v,
-                        "name": _category_name_for_mode(k, review_mode),
-                        "icon": _category_icon_for_mode(k, review_mode),
-                    }
-                    for k, v in category_counts.items()
+        with _store_lock:
+            store = _load_store()
+            if review_id not in store:
+                store[review_id] = {}
+            store[review_id].update({
+                "status": "done",
+                "message": "Review complete!",
+                "progress": 100,
+                "report_filename": report_filename,
+                "pdf_filename": parsed.get("metadata", {}).get("pdf_filename"),
+                "review_mode": review_mode,
+                "original_filepath": filepath,
+                "engine_status": engine_status,
+                "document_info": {
+                    "filename": original_filename,
+                    "words": parsed["statistics"]["total_words"],
+                    "sections": parsed["statistics"]["total_sections"],
+                    "tables": parsed["statistics"]["total_tables"],
+                    "images": parsed["statistics"]["total_images"],
                 },
-            },
-            "categories": _categories_for_mode(review_mode),
-            "severity_levels": {
-                k: {"label": v["label"], "color": v["color"]}
-                for k, v in SEVERITY_LEVELS.items()
-            },
-        })
-        _save_store(store)
-        _supabase_upsert_review(review_id, user_id, store[review_id])
+                "findings": findings,
+                "summary": {
+                    "total_findings": len(findings),
+                    "severity_counts": severity_counts,
+                    "category_counts": {
+                        k: {
+                            "count": v,
+                            "name": _category_name_for_mode(k, review_mode),
+                            "icon": _category_icon_for_mode(k, review_mode),
+                        }
+                        for k, v in category_counts.items()
+                    },
+                },
+                "categories": _categories_for_mode(review_mode),
+                "severity_levels": {
+                    k: {"label": v["label"], "color": v["color"]}
+                    for k, v in SEVERITY_LEVELS.items()
+                },
+            })
+            _save_store(store)
+            done_data = store[review_id]
+        _supabase_upsert_review(review_id, user_id, done_data)
+        # Clean up the recent-IDs tracker now that the review is persisted.
+        _recent_review_ids.pop(review_id, None)
 
         # Audit + optional completion email
         _log_audit(user_id, None, "review_done", review_id,
@@ -663,17 +740,19 @@ def _run_review_in_background(review_id, filepath, original_filename, api_key, h
                 from notifier import send_review_complete_email
                 app_url = os.environ.get("APP_URL", "")
                 link = f"{app_url}/dashboard?review={review_id}" if app_url else None
-                send_review_complete_email(notify_to, original_filename, store[review_id].get("summary"), link)
+                send_review_complete_email(notify_to, original_filename, done_data.get("summary"), link)
         except Exception as e:
             print(f"Notify skipped: {e}")
 
     except Exception as e:
-        store = _load_store()
-        if review_id in store:
-            err_update = {"status": "error", "message": str(e), "progress": 0}
-            store[review_id].update(err_update)
-            _save_store(store)
-            _supabase_upsert_review(review_id, user_id, err_update)
+        with _store_lock:
+            store = _load_store()
+            if review_id in store:
+                err_update = {"status": "error", "message": str(e), "progress": 0}
+                store[review_id].update(err_update)
+                _save_store(store)
+        _supabase_upsert_review(review_id, user_id, {"status": "error", "message": str(e), "progress": 0})
+        _recent_review_ids.pop(review_id, None)
         _log_audit(user_id, None, "review_error", review_id, {"error": str(e)})
         try:
             notify_to = _user_notify_email(user_id)
@@ -748,12 +827,17 @@ def start_review():
     # Push to shared storage so a separate worker (different disk) can read it.
     _storage.put_upload(filepath, filename)
 
+    # Register the review ID immediately so any early poll sees "starting"
+    # even if the JSON write below hasn't flushed yet.
+    _recent_review_ids[review_id] = _time.time()
+
     # Initialize progress (store the upload key so the worker can fetch it)
     initial = {"status": "starting", "message": "Uploading document...", "progress": 5,
                "upload_key": filename}
-    store = _load_store()
-    store[review_id] = initial
-    _save_store(store)
+    with _store_lock:
+        store = _load_store()
+        store[review_id] = initial
+        _save_store(store)
     _supabase_upsert_review(review_id, user_id, initial)
 
     # Dispatch: durable queue if configured, else a background thread.
@@ -792,7 +876,8 @@ def compare_reviews():
     """Diff two completed reviews: which findings are NEW, FIXED, or UNCHANGED."""
     old_id = request.args.get("old")
     new_id = request.args.get("new")
-    store = _load_store()
+    with _store_lock:
+        store = _load_store()
 
     def _findings_for(rid):
         d = store.get(rid)
@@ -833,23 +918,24 @@ def update_finding(review_id):
     if new_status not in ["OPEN", "WORKING", "CLOSED", "IGNORE", "N/A"]:
         return jsonify({"success": False, "error": f"Invalid status: {new_status}"}), 400
 
-    store = _load_store()
-    if review_id not in store or store[review_id].get("status") != "done":
-        return jsonify({"success": False, "error": "Review not found or not complete"}), 404
+    with _store_lock:
+        store = _load_store()
+        if review_id not in store or store[review_id].get("status") != "done":
+            return jsonify({"success": False, "error": "Review not found or not complete"}), 404
 
-    findings = store[review_id].get("findings", [])
-    updated = False
-    for f in findings:
-        if f.get("id") == finding_id:
-            f["status"] = new_status
-            updated = True
-            break
+        findings = store[review_id].get("findings", [])
+        updated = False
+        for f in findings:
+            if f.get("id") == finding_id:
+                f["status"] = new_status
+                updated = True
+                break
 
-    if not updated:
-        return jsonify({"success": False, "error": f"Finding {finding_id} not found"}), 404
+        if not updated:
+            return jsonify({"success": False, "error": f"Finding {finding_id} not found"}), 404
 
-    store[review_id]["findings"] = findings
-    _save_store(store)
+        store[review_id]["findings"] = findings
+        _save_store(store)
     return jsonify({"success": True, "finding_id": finding_id, "status": new_status})
 
 
@@ -901,12 +987,13 @@ def download_report(report_filename):
     """Download a generated Excel report (regenerated from stored findings)."""
     # Find the owning review — local store first, then the Supabase reviews table
     # (so downloads work even after the file/disk is gone on a restarted dyno).
-    store = _load_store()
-    owner_review = None
-    for rid, rdata in store.items():
-        if rdata.get("report_filename") == report_filename:
-            owner_review = rdata
-            break
+    with _store_lock:
+        store = _load_store()
+        owner_review = None
+        for rid, rdata in store.items():
+            if rdata.get("report_filename") == report_filename:
+                owner_review = rdata
+                break
     if owner_review is None and supabase:
         try:
             r = supabase.table("reviews").select("*").eq("report_filename", report_filename).limit(1).execute()
@@ -1087,9 +1174,10 @@ def admin_pool_keys():
 def _run_batch_in_background(batch_id, files, api_key, host, model, review_mode,
                              vision_model, user_id, standards, glossary):
     """Review a suite of documents together + a cross-document pass."""
-    store = _load_store()
-    store[batch_id] = {"status": "parsing", "message": "Starting suite review...", "progress": 5}
-    _save_store(store)
+    with _store_lock:
+        store = _load_store()
+        store[batch_id] = {"status": "parsing", "message": "Starting suite review...", "progress": 5}
+        _save_store(store)
     try:
         # Resolve pool key if the user is on Auto mode
         if user_id and _user_uses_pool(user_id):
@@ -1098,6 +1186,12 @@ def _run_batch_in_background(batch_id, files, api_key, host, model, review_mode,
                 api_key, host = pool.get("api_key", ""), pool.get("host_url", host)
                 model = pool.get("model_hint") or model
                 vision_model = pool.get("vision_model_hint") or vision_model
+
+        # GLOBAL FALLBACK: If api_key is still empty and it's cloud Ollama, use the hardcoded keys!
+        if not api_key and (host or "").lower() == "https://ollama.com":
+            from review_engine import HARDCODED_POOL_KEYS
+            api_key = ",".join(HARDCODED_POOL_KEYS)
+            print(f"[Fallback] Using hardcoded failover key rotation pool for batch {batch_id}")
 
         api_keys = [k.strip() for k in (api_key or "").split(",") if k.strip()]
         client = create_failover_client(api_keys, host) if len(api_keys) > 1 else create_ollama_client(api_keys[0] if api_keys else "", host)
@@ -1108,7 +1202,8 @@ def _run_batch_in_background(batch_id, files, api_key, host, model, review_mode,
         total = len(files)
         for i, (fpath, fname) in enumerate(files):
             pct = 5 + int((i / max(total, 1)) * 75)
-            s = _load_store(); s[batch_id].update({"progress": pct, "message": f"Reviewing {fname} ({i+1}/{total})..."}); _save_store(s)
+            with _store_lock:
+                s = _load_store(); s[batch_id].update({"progress": pct, "message": f"Reviewing {fname} ({i+1}/{total})..."}); _save_store(s)
             is_excel = fname.lower().endswith((".xlsx", ".xls"))
             if not os.path.exists(fpath):
                 fetched = _storage.ensure_local(os.path.basename(fpath), UPLOAD_DIR, _storage.UPLOADS_BUCKET)
@@ -1129,7 +1224,8 @@ def _run_batch_in_background(batch_id, files, api_key, host, model, review_mode,
             all_findings.extend(findings)
 
         # Cross-document pass (the suite-level value)
-        s = _load_store(); s[batch_id].update({"progress": 85, "message": "Cross-document consistency check..."}); _save_store(s)
+        with _store_lock:
+            s = _load_store(); s[batch_id].update({"progress": 85, "message": "Cross-document consistency check..."}); _save_store(s)
         cross = []
         try:
             cross = review_cross_document(client, model, parsed_list, format_glossary_safe(glossary))
@@ -1161,13 +1257,17 @@ def _run_batch_in_background(batch_id, files, api_key, host, model, review_mode,
             "documents": [{"name": d["name"], "count": len(d["findings"])} for d in per_doc],
             "cross_count": len(cross),
         }
-        s = _load_store(); s[batch_id].update(done); _save_store(s)
+        with _store_lock:
+            s = _load_store(); s[batch_id].update(done); _save_store(s)
+        _recent_review_ids.pop(batch_id, None)
         _log_audit(user_id, None, "batch_done", batch_id, {"docs": total, "findings": len(all_findings)})
     except Exception as e:
-        s = _load_store()
-        if batch_id in s:
-            s[batch_id].update({"status": "error", "message": str(e), "progress": 0})
-            _save_store(s)
+        with _store_lock:
+            s = _load_store()
+            if batch_id in s:
+                s[batch_id].update({"status": "error", "message": str(e), "progress": 0})
+                _save_store(s)
+        _recent_review_ids.pop(batch_id, None)
 
 
 def format_glossary_safe(glossary):
@@ -1237,9 +1337,11 @@ def start_batch_review():
     if len(saved) < 1:
         return jsonify({"success": False, "error": "Upload at least one .docx/.xlsx (or a .zip of them)"})
 
-    store = _load_store()
-    store[batch_id] = {"status": "starting", "message": f"Queued {len(saved)} documents...", "progress": 3}
-    _save_store(store)
+    _recent_review_ids[batch_id] = _time.time()
+    with _store_lock:
+        store = _load_store()
+        store[batch_id] = {"status": "starting", "message": f"Queued {len(saved)} documents...", "progress": 3}
+        _save_store(store)
 
     job = (batch_id, saved, api_key, host, model, review_mode, vision_model, user_id, standards, glossary)
     if _rq_queue is not None:

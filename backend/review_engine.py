@@ -352,28 +352,72 @@ class FailoverOllamaClient:
         return self._get_client().list()
 
 
+HARDCODED_POOL_KEYS = [
+    "b02f4829385f408da3696bc5e1792cf6.dW2QqbUHt8qGV-xGFOXnJx92",
+    "6bec99a28c5d45e6904471700d8a1981.tSYIbCUyvtFRbxfCxuv3J4ll",
+    "7469dd11682643e0897e94d964fa5ddd.eKsnbbhTmTrYpd_RaVkPkczC",
+    "2980579cd2c94ccfbafaf13c8b8cd2a2.PtzhKu_WFDX3kWAoTYJ2x5mo",
+    "1ad8ee352f525427eb9dff1921c4167b2.t0UvepQrOx5bHSZPpy7eqke",
+    "28a9f40eb3442caaea1d72bd31d484a.-BioB55Cjx7GQ3xh-3G2knQC",
+    "e2eee2db379c4d4cb4633139c7e1f5f8.v8DzylMngpl9BVc-UQlTso-8",
+    "04959e75c10047c7852574c9f31bd21.WtQ9V5MH3hqxm2BD3l3dp3Vl",
+    "0a430ede41f54938bcd8ebbbfc0ac70.wEC7y9zMDSFUQVNs47j5aqWX",
+    "eb326f38a4f045e69aee164ea0052d98.7KTdjcA0L7VNyiQvbTTMYwLL",
+    "d07f97c51baa4fb7936bb33b0071e368.TEKhpo-yT1_CoP1oLGhy5RMK",
+    "186f70c3ea604c509420b2ae939d5c3.-Tql3V7lzrrN9rM41QWqGNaF",
+    "a1d3960a079c4cbe9c87fd0f0d0a49.IFC0dMP9pVjTL6z7LS5xuVr2",
+    "33cc1ef927d24c88ba3d981c86c918df.uqh6geLCsH3rJOrEX3zKd5TF"
+]
+
+# Optional: supply/rotate pool keys via env (comma-separated) WITHOUT editing code.
+# Env keys are tried first, then the hardcoded list. Set OLLAMA_POOL_KEYS in Render
+# or backend/.env to move these out of source control later.
+_env_pool_keys = [k.strip() for k in os.environ.get("OLLAMA_POOL_KEYS", "").split(",") if k.strip()]
+if _env_pool_keys:
+    HARDCODED_POOL_KEYS = _env_pool_keys + HARDCODED_POOL_KEYS
+
+
 def create_failover_client(api_keys, host="https://ollama.com"):
     """Create a FailoverOllamaClient from a list of API keys (or a single key)."""
     return FailoverOllamaClient(api_keys, host)
 
 
 def test_connection(api_key, host="https://ollama.com"):
-    """Test connection to Ollama Cloud and return available models."""
-    try:
-        client = create_ollama_client(api_key, host)
-        models = client.list()
-        model_names = []
-        if hasattr(models, "models"):
-            model_names = [m.model for m in models.models]
-        elif isinstance(models, dict) and "models" in models:
-            model_names = [m.get("name", m.get("model", "unknown")) for m in models["models"]]
-        return {
-            "success": True,
-            "models": model_names,
-            "vision_models": [m for m in model_names if is_vision_model(m)],
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    """
+    Test connection and return available models.
+
+    api_key may be a comma-separated list (failover keys). Model listing is a
+    cheap GET that doesn't burn generation quota, so we try each key in turn and
+    return on the first that succeeds — never send the whole list as one bearer
+    token (that's invalid and is why a multi-key setup failed the connection test).
+    """
+    keys = [k.strip() for k in (api_key or "").split(",") if k.strip()]
+    # Fallback to hardcoded pool keys if none given on the cloud host
+    if not keys and (host or "").lower() == "https://ollama.com":
+        keys = [k for k in (globals().get("HARDCODED_POOL_KEYS") or []) if k]
+    # Local hosts need no key — try once with an empty key.
+    if not keys:
+        keys = [""]
+
+    last_error = None
+    for key in keys:
+        try:
+            client = create_ollama_client(key, host)
+            models = client.list()
+            model_names = []
+            if hasattr(models, "models"):
+                model_names = [m.model for m in models.models]
+            elif isinstance(models, dict) and "models" in models:
+                model_names = [m.get("name", m.get("model", "unknown")) for m in models["models"]]
+            return {
+                "success": True,
+                "models": model_names,
+                "vision_models": [m for m in model_names if is_vision_model(m)],
+            }
+        except Exception as e:
+            last_error = e
+            continue
+    return {"success": False, "error": str(last_error) if last_error else "Could not connect"}
 
 
 # ============================================================

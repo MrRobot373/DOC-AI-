@@ -403,7 +403,7 @@ def _build_replacement_map(auto_findings: list) -> list:
         for text in (comment, fix):
             m = __import__('re').search(
                 r'["\x27]((?:[^"\x27]+))["\x27]'
-                r'\s*(?:should be|->|=>|correct to|replace with|changed to|to)\s*'
+                r'\s*(?:should be|->|=>|correct to|replace with|with|changed to|to)\s*'
                 r'["\x27]((?:[^"\x27]+))["\x27]',
                 text, __import__('re').IGNORECASE | __import__('re').DOTALL,
             )

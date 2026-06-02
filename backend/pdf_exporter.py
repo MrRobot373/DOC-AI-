@@ -7,6 +7,7 @@ Mirrors the Excel report content but as a PDF for sharing/printing. Uses reportl
 from __future__ import annotations
 
 from datetime import datetime
+import html
 
 SEV_COLOR = {"CRITICAL": "#c0392b", "MAJOR": "#e67e22", "MINOR": "#b7950b"}
 SEV_ORDER = {"CRITICAL": 0, "MAJOR": 1, "MINOR": 2}
@@ -32,7 +33,7 @@ def findings_to_pdf(findings, doc_name, out_path):
                             topMargin=14 * mm, bottomMargin=14 * mm)
     elems = []
     elems.append(Paragraph(f"DOC-AI Review Report", title_style))
-    elems.append(Paragraph(f"{doc_name}", h2))
+    elems.append(Paragraph(html.escape(f"{doc_name}"), h2))
     elems.append(Paragraph(f"Generated: {datetime.now():%Y-%m-%d %H:%M}", body))
     elems.append(Spacer(1, 6 * mm))
 
@@ -54,9 +55,9 @@ def findings_to_pdf(findings, doc_name, out_path):
             str(i),
             f.get("severity", "")[:4],
             str(f.get("page", "-")),
-            Paragraph(str(f.get("category", "")).replace("_", " ").title(), body),
-            Paragraph((f.get("comment", "") or "")[:600], body),
-            Paragraph((f.get("fix", "") or "")[:300], body),
+            Paragraph(html.escape(str(f.get("category", "")).replace("_", " ").title()), body),
+            Paragraph(html.escape((f.get("comment", "") or "")[:600]), body),
+            Paragraph(html.escape((f.get("fix", "") or "")[:300]), body),
         ])
 
     table = Table(rows, colWidths=[8 * mm, 12 * mm, 12 * mm, 30 * mm, 75 * mm, 45 * mm], repeatRows=1)
