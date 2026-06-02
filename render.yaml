@@ -1,48 +1,74 @@
 # ============================================================
 # DOC-AI — Render Blueprint (Infrastructure as Code)
-# Render reads this file and provisions the services below, wired together.
+# Render reads this file and provisions every service below, wired together.
 #
-# ACTIVE SETUP (works today, cheapest):
-#   • web — Flask API in a Docker image with LibreOffice baked in.
-#       → REAL page numbers (renders DOCX→PDF in-process via LibreOffice; no
-#         separate Gotenberg service needed).
-#       → Reviews run in-process (threading). Uploaded file + report live on the
-#         same disk, so everything works without shared storage.
+#   • web      — Flask API (Docker image with LibreOffice baked in → REAL page
+#                numbers; no separate Gotenberg service needed)
+#   • redis    — managed Key Value store (FREE tier) used as the job queue
+#   • worker   — durable review worker: pulls jobs from Redis so reviews survive
+#                restarts and run in parallel. Uploads/reports are shared via
+#                Supabase Storage, so the worker (separate disk) can read them.
 #
-# COST: the web service runs on the FREE plan (sleeps when idle). Switch
-# `plan: free` → `plan: starter` (~$7/mo) for an always-on instance.
+# COST (Render): Key Value has a free tier; a background `worker` and an
+# always-on `web` are paid (~$7/mo each on Starter). The web can run `free`
+# (sleeps when idle).
 #
-# ---- SCALING UP later (durable queue: Redis + worker) ----
-# A separate worker is a different container with its OWN disk, so it can't read
-# the file the web service saved. Before enabling Redis+worker you must move
-# uploads/reports to shared object storage (e.g. Supabase Storage). Ask and I'll
-# wire that up; until then, keep the single-web setup below — it is correct and
-# already gives you real page numbers.
+# ---- FREE / single-instance setup ----
+# Delete the `worker` and `redis` services and remove REDIS_URL from `web`. The
+# web service (LibreOffice baked in) still does reviews in-process via threading
+# AND still produces real page numbers. You only lose crash-safety/parallelism.
+#
+# REQUIRED before the worker is useful: set the SUPABASE_* vars so uploads/reports
+# go to shared storage (the worker is a separate container with its own disk).
 # ============================================================
 
 envVarGroups:
   - name: doc-ai-shared
     envVars:
-      # Set these once in the Render dashboard after the blueprint is created.
       - key: VITE_SUPABASE_URL
         sync: false
       - key: VITE_SUPABASE_ANON_KEY
         sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY      # backend writes reviews/audit with this
+      - key: SUPABASE_SERVICE_ROLE_KEY      # backend writes reviews/audit/storage
         sync: false
       - key: SUPABASE_JWT_SECRET            # verifies user JWTs locally (fast)
         sync: false
       - key: ALLOWED_ORIGINS                # e.g. https://your-app.vercel.app
 
 services:
+  - type: keyvalue
+    name: doc-ai-redis
+    plan: free
+    ipAllowList: []          # empty = only other Render services can connect
+
   - type: web
     name: doc-ai-backend
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: .
-    plan: free                # → "starter" for always-on (no idle sleep)
+    plan: starter            # "free" to avoid cost (sleeps when idle)
     healthCheckPath: /
     envVars:
       - key: PORT
         value: 10000
+      - key: REDIS_URL        # enables the durable queue; remove for threading
+        fromService:
+          type: keyvalue
+          name: doc-ai-redis
+          property: connectionString
+      - fromGroup: doc-ai-shared
+
+  - type: worker
+    name: doc-ai-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    dockerCommand: python backend/worker.py
+    plan: starter
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: doc-ai-redis
+          property: connectionString
       - fromGroup: doc-ai-shared
