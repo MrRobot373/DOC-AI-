@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import DocumentViewer from "@/components/DocumentViewer"
 import AdminPanel from "@/components/AdminPanel"
 import HistoryPanel from "@/components/HistoryPanel"
+import ErrorBoundary from "@/components/ErrorBoundary"
 import {
     LogOut, Settings, UploadCloud, CheckCircle2, AlertTriangle,
     FileText, X, ChevronDown, ExternalLink, MessageSquare, HelpCircle, Send,
@@ -59,7 +60,6 @@ export default function Dashboard({ user }: DashboardProps) {
 
     const LOCAL_OLLAMA = "http://localhost:11434"
     const CLOUD_OLLAMA = "https://ollama.com"
-    const FREELLMAPI_HOST = "http://localhost:3001"
     const isLocalHost = (h: string) => /localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal/i.test(h || "")
     const runtimeIsLocal = isLocalHost(hostUrl)
 
@@ -602,12 +602,10 @@ export default function Dashboard({ user }: DashboardProps) {
                                     {[
                                         { id: "local", label: "Local (private)", onClick: () => { setUsePool(false); setHostUrl(LOCAL_OLLAMA) } },
                                         { id: "cloud", label: "Cloud", onClick: () => { setUsePool(false); setHostUrl(CLOUD_OLLAMA) } },
-                                        { id: "freellmapi", label: "FreeLLMAPI", onClick: () => { setUsePool(false); setHostUrl(FREELLMAPI_HOST) } },
                                         { id: "auto", label: "Auto (pool)", onClick: () => setUsePool(true) },
                                     ].map(opt => {
                                         const active = opt.id === "auto" ? usePool
-                                            : !usePool && (opt.id === "local" ? runtimeIsLocal && hostUrl === LOCAL_OLLAMA
-                                                : opt.id === "freellmapi" ? hostUrl.includes(":3001")
+                                            : !usePool && (opt.id === "local" ? runtimeIsLocal
                                                 : hostUrl === CLOUD_OLLAMA)
                                         return (
                                             <button key={opt.id} type="button" onClick={opt.onClick}
@@ -619,12 +617,10 @@ export default function Dashboard({ user }: DashboardProps) {
                                 </div>
                                 <p className="text-xs text-gray-500">
                                     {usePool
-                                        ? "Auto mode: uses the shared key pool managed by your admin. Just pick a model name (or leave default)."
+                                        ? "Uses the shared key pool managed by your admin — no key needed."
                                         : runtimeIsLocal
-                                        ? "Documents never leave this machine/network. No API key required."
-                                        : hostUrl.includes(":3001")
-                                        ? "FreeLLMAPI aggregator (16 free provider tiers behind one endpoint)."
-                                        : "Uses ollama.com. Requires an API key. Documents are sent to the cloud."}
+                                        ? "Private: documents stay on this machine. No API key required."
+                                        : "Cloud (ollama.com). Requires an API key."}
                                 </p>
                             </div>
                             <div className="space-y-2">
@@ -698,17 +694,22 @@ export default function Dashboard({ user }: DashboardProps) {
                                 </>
                             )}
 
-                            {/* Project glossary / rules */}
-                            <div className="space-y-2">
-                                <Label className="text-gray-300 text-sm">Project Glossary & Rules <span className="text-gray-500">(optional)</span></Label>
-                                <textarea
-                                    value={glossaryText}
-                                    onChange={e => setGlossaryText(e.target.value)}
-                                    placeholder={"One per line. Acronyms as 'KEY: meaning', rules as plain text.\nHVDCDC: High-Voltage DC-DC converter\nUse 'Maximum Ratings' not 'Max Ratings'"}
-                                    className="flex w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-xs h-24 focus:outline-none focus:ring-2 focus:ring-white/20 resize-none text-white placeholder:text-gray-600"
-                                />
-                                <p className="text-xs text-gray-500">Injected into the AI prompts so it uses your terminology and watches for your known issues.</p>
-                            </div>
+                            {/* Project glossary / rules — collapsed by default to keep this panel clean */}
+                            <details className="group border-t border-white/5 pt-3">
+                                <summary className="text-sm text-gray-300 cursor-pointer select-none list-none flex items-center gap-2">
+                                    <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+                                    Project Glossary &amp; Rules <span className="text-gray-500 text-xs">(optional)</span>
+                                </summary>
+                                <div className="space-y-2 mt-2">
+                                    <textarea
+                                        value={glossaryText}
+                                        onChange={e => setGlossaryText(e.target.value)}
+                                        placeholder={"One per line.\nHVDCDC: High-Voltage DC-DC converter\nUse 'Maximum Ratings' not 'Max Ratings'"}
+                                        className="flex w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-xs h-20 focus:outline-none focus:ring-2 focus:ring-white/20 resize-none text-white placeholder:text-gray-600"
+                                    />
+                                    <p className="text-xs text-gray-500">Acronyms as "KEY: meaning", rules as plain text — fed to the AI.</p>
+                                </div>
+                            </details>
 
                             {/* Email notification opt-in */}
                             <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
@@ -729,17 +730,12 @@ export default function Dashboard({ user }: DashboardProps) {
                                 </div>
                             )}
 
-                            {/* Notice */}
-                            <div className="bg-white/[0.02] border border-white/5 rounded-xl p-4 space-y-2">
-                                <div className="flex gap-2.5 text-xs text-gray-500">
-                                    <AlertTriangle className="h-3.5 w-3.5 text-amber-500/70 shrink-0 mt-0.5" />
-                                    <p>In case quota is exceeded, use another account to login to Ollama, generate a new key, and try again.</p>
-                                </div>
-                                <a href="https://ollama.com/settings/keys" target="_blank" className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors">
+                            {!usePool && !runtimeIsLocal && (
+                                <a href="https://ollama.com/settings/keys" target="_blank" className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-white transition-colors">
                                     <ExternalLink className="h-3 w-3" />
-                                    Generate API Key on ollama.com
+                                    Generate an API key on ollama.com
                                 </a>
-                            </div>
+                            )}
 
                         </div>
 
@@ -1288,15 +1284,17 @@ export default function Dashboard({ user }: DashboardProps) {
                                 <p className="text-xs text-gray-500 flex items-center gap-1.5">
                                     <Crosshair className="h-3.5 w-3.5" /> Click any finding to locate it in the document.
                                 </p>
-                                <DocumentViewer
-                                    file={selectedFile}
-                                    reviewId={reviewId}
-                                    apiBase={API_BASE_URL}
-                                    authToken={viewerAuthToken}
-                                    targetPage={viewerTargetPage}
-                                    highlight={viewerHighlight}
-                                    highlightNonce={highlightNonce}
-                                />
+                                <ErrorBoundary fallback={<p className="text-xs text-gray-500">Document preview unavailable for this file.</p>}>
+                                    <DocumentViewer
+                                        file={selectedFile}
+                                        reviewId={reviewId}
+                                        apiBase={API_BASE_URL}
+                                        authToken={viewerAuthToken}
+                                        targetPage={viewerTargetPage}
+                                        highlight={viewerHighlight}
+                                        highlightNonce={highlightNonce}
+                                    />
+                                </ErrorBoundary>
                             </div>
                         )}
                         </div>

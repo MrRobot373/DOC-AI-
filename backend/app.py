@@ -278,54 +278,41 @@ def _log_audit(user_id, user_email, action, review_id=None, metadata=None):
 STATE_FILE = os.path.join(UPLOAD_DIR, "review_state.json")
 
 def _load_store():
-    store = {}
-    # 1. Try to load from local file
+    """Local JSON store (fast, in-process). The durable copy lives in the Supabase
+    `reviews` table, written per-review by _supabase_upsert_review and read back by
+    _get_review_record when a review isn't in this local store (e.g. after a restart)."""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, 'r') as f:
-                store = json.load(f)
+                return json.load(f)
         except Exception:
-            store = {}
-    
-    # 2. If nothing in local file OR local file missing, try Supabase (Cloud Persistence)
-    if not store and supabase:
-        try:
-            response = supabase.table("review_state").select("*").execute()
-            if response.data:
-                for row in response.data:
-                    store[row["id"]] = row["data"]
-                # Save locally so subsequent reads are fast
-                _save_store(store)
-        except Exception as e:
-            print(f"Supabase load error: {e}")
-            
-    return store
+            return {}
+    return {}
 
 def _save_store(store):
-    # Save to local file
+    """Persist the local JSON store. Durable DB writes go through
+    _supabase_upsert_review at parsing/done/error (with the owning user_id)."""
     try:
         with open(STATE_FILE, 'w') as f:
             json.dump(store, f)
     except Exception:
         pass
-    
-    # Sync to Supabase if available
+
+
+def _get_review_record(review_id):
+    """Return a review dict from the local store, falling back to the Supabase
+    `reviews` table (survives dyno restarts / ephemeral disk). None if not found."""
+    store = _load_store()
+    if review_id in store:
+        return store[review_id]
     if supabase:
         try:
-            # We store the entire store as a JSON blob for simplicity in this migration
-            # but ideally we'd use a row-per-review table.
-            # Here we just iterate and upsert active reviews.
-            for rid, data in store.items():
-                if data.get("status") in ["done", "error"]:
-                    # These might already be in history, but we ensure sync
-                    pass
-                supabase.table("review_state").upsert({
-                    "id": rid,
-                    "data": data,
-                    "updated_at": "now()"
-                }).execute()
+            r = supabase.table("reviews").select("*").eq("id", review_id).single().execute()
+            if r.data:
+                return r.data
         except Exception as e:
-            print(f"Supabase sync error: {e}")
+            print(f"reviews fetch error: {e}")
+    return None
 
 
 @app.route("/")
@@ -762,26 +749,18 @@ def start_review():
 @app.route("/api/progress/<review_id>")
 @require_auth
 def get_progress(review_id):
-    """Get the progress/result of a review."""
-    store = _load_store()
-    if review_id not in store:
+    """Get the progress/result of a review (local store, then Supabase reviews table)."""
+    data = _get_review_record(review_id)
+    if not data:
         return jsonify({"status": "unknown", "message": "Review not found", "progress": 0})
 
-    data = store[review_id]
-
-    # If done, return full results
-    if data["status"] == "done":
+    if data.get("status") in ("done", "error"):
         return jsonify(data)
 
-    # If error, return error
-    if data["status"] == "error":
-        return jsonify(data)
-
-    # Otherwise return progress
     return jsonify({
-        "status": data["status"],
-        "message": data["message"],
-        "progress": data["progress"],
+        "status": data.get("status", "unknown"),
+        "message": data.get("message", ""),
+        "progress": data.get("progress", 0),
     })
 
 
@@ -890,24 +869,32 @@ def apply_fixes(review_id):
 
 @app.route("/api/download/<report_filename>")
 def download_report(report_filename):
-    """Download a generated Excel report (regenerated with latest statuses)."""
-    # Find the review that owns this report
+    """Download a generated Excel report (regenerated from stored findings)."""
+    # Find the owning review — local store first, then the Supabase reviews table
+    # (so downloads work even after the file/disk is gone on a restarted dyno).
     store = _load_store()
     owner_review = None
     for rid, rdata in store.items():
         if rdata.get("report_filename") == report_filename:
             owner_review = rdata
             break
+    if owner_review is None and supabase:
+        try:
+            r = supabase.table("reviews").select("*").eq("report_filename", report_filename).limit(1).execute()
+            if r.data:
+                owner_review = r.data[0]
+        except Exception as e:
+            print(f"reviews lookup error: {e}")
 
     report_path = _safe_under(REPORTS_DIR, report_filename)
     if not report_path:
         return jsonify({"error": "Invalid report name"}), 400
 
-    # If we found the review, regenerate with latest statuses (all modes use one report).
+    # Regenerate from stored findings (works even if the file vanished on restart).
     if owner_review and owner_review.get("findings"):
         try:
             findings = owner_review["findings"]
-            doc_name = owner_review.get("document_info", {}).get("filename", "Unknown")
+            doc_name = (owner_review.get("document_info") or {}).get("filename", "Unknown")
             generate_excel_report(findings, doc_name, report_path)
         except Exception as e:
             print(f"Report regeneration error: {e}")
