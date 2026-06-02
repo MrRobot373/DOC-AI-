@@ -14,7 +14,7 @@ docai = "cli:main"
 
 [tool.setuptools]
 # Flat module layout (no package dir); expose the engine modules + CLI.
-py-modules = ["cli", "app", "review_engine", "doc_parser", "report_generator", "doc_fixer", "page_locator", "llm_client", "notifier", "pdf_exporter", "worker"]
+py-modules = ["cli", "app", "review_engine", "doc_parser", "report_generator", "doc_fixer", "page_locator", "llm_client", "notifier", "pdf_exporter", "worker", "storage"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

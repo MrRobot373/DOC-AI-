@@ -16,11 +16,15 @@ import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 import "react-pdf/dist/Page/AnnotationLayer.css"
 import "react-pdf/dist/Page/TextLayer.css"
 
-// Point the PDF.js worker at the CDN copy bundled with pdfjs-dist.
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/build/pdf.worker.min.mjs",
-    import.meta.url,
-).toString()
+// Point the PDF.js worker at a version-matched CDN copy. Using the runtime
+// pdfjs.version avoids the fragile Vite `new URL(...import.meta.url)` resolution
+// that can break in production builds.
+try {
+    pdfjs.GlobalWorkerOptions.workerSrc =
+        `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`
+} catch {
+    /* non-fatal: the docx-preview fallback still works */
+}
 
 interface DocumentViewerProps {
     /** .docx file for the fallback docx-preview renderer. */

@@ -8,6 +8,7 @@ import LandingPage from "@/pages/LandingPage"
 import Login from "@/pages/Login"
 import Signup from "@/pages/Signup"
 import Dashboard from "@/pages/Dashboard"
+import ErrorBoundary from "@/components/ErrorBoundary"
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
@@ -42,7 +43,7 @@ export default function App() {
         <Route path="/" element={!user ? <LandingPage /> : <Navigate to="/dashboard" />} />
         <Route path="/login" element={!user ? <Login /> : <Navigate to="/dashboard" />} />
         <Route path="/signup" element={!user ? <Signup /> : <Navigate to="/dashboard" />} />
-        <Route path="/dashboard" element={user ? <Dashboard user={user} /> : <Navigate to="/login" />} />
+        <Route path="/dashboard" element={user ? <ErrorBoundary><Dashboard user={user} /></ErrorBoundary> : <Navigate to="/login" />} />
       </Routes>
     </Router>
   )

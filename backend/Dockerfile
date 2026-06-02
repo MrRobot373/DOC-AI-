@@ -4,10 +4,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps kept minimal; PDF page-rendering is done by the Gotenberg service,
-# not a local LibreOffice, so no heavy packages are needed here.
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
+
+# LibreOffice (headless) + fonts so page_locator can render DOCX -> PDF in-process
+# and read REAL page numbers — no separate Gotenberg service needed. If you prefer
+# the lighter Gotenberg-service route, you can drop this block and set GOTENBERG_URL.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libreoffice-writer libreoffice-calc \
+        fonts-dejavu fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install -r backend/requirements.txt
